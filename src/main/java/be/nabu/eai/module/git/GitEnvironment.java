@@ -18,6 +18,10 @@ public class GitEnvironment extends GitReference {
 	public void setName(String name) {
 		this.name = name;
 	}
+	public GitReleaseCandidate getLastReleaseCandidate() {
+		SortedSet<GitReleaseCandidate> releaseCandidates = getReleaseCandidates();
+		return releaseCandidates.isEmpty() ? null : releaseCandidates.last();
+	}
 	public SortedSet<GitReleaseCandidate> getReleaseCandidates() {
 		if (releaseCandidates == null) {
 			synchronized(this) {

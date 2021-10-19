@@ -3,6 +3,7 @@ package be.nabu.eai.module.git;
 import java.util.Date;
 import java.util.List;
 
+import javax.xml.bind.annotation.XmlAttribute;
 import javax.xml.bind.annotation.XmlRootElement;
 
 @XmlRootElement(name = "node")
@@ -14,18 +15,21 @@ public class GitNode {
 	private String name, description, comment, summary;
 	private List<String> tags;
 	private String mergeScript;
+	@XmlAttribute
 	public long getVersion() {
 		return version;
 	}
 	public void setVersion(long version) {
 		this.version = version;
 	}
+	@XmlAttribute
 	public Date getLastModified() {
 		return lastModified;
 	}
 	public void setLastModified(Date lastModified) {
 		this.lastModified = lastModified;
 	}
+	@XmlAttribute
 	public Date getCreated() {
 		return created;
 	}

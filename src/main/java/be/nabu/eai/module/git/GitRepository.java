@@ -1,17 +1,21 @@
 package be.nabu.eai.module.git;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.URI;
 import java.nio.charset.Charset;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -40,7 +44,10 @@ import be.nabu.eai.module.git.merge.MergeResult;
 import be.nabu.eai.module.git.merge.MergeEntry.MergeState;
 import be.nabu.eai.repository.EAIResourceRepository;
 import be.nabu.glue.api.ExecutionEnvironment;
+import be.nabu.glue.api.Executor;
+import be.nabu.glue.api.OutputFormatter;
 import be.nabu.glue.api.Script;
+import be.nabu.glue.api.runs.GlueValidation;
 import be.nabu.glue.core.impl.parsers.GlueParserProvider;
 import be.nabu.glue.core.impl.providers.StaticJavaMethodProvider;
 import be.nabu.glue.core.impl.providers.SystemMethodProvider;
@@ -54,6 +61,7 @@ import be.nabu.libs.types.TypeUtils;
 import be.nabu.libs.types.api.ComplexType;
 import be.nabu.libs.types.binding.api.Window;
 import be.nabu.libs.types.binding.xml.XMLBinding;
+import be.nabu.libs.types.java.BeanInstance;
 import be.nabu.libs.types.java.BeanResolver;
 import be.nabu.utils.io.IOUtils;
 
@@ -109,6 +117,14 @@ import be.nabu.utils.io.IOUtils;
  *  -> e.g. for bebat, we can deploy v24 of the bebat folder (which might be up to v28 looking at the master) and LATEST from the telemetrics package
  *  -> by default there is always a build for "LATEST"
  *  
+ * 
+ * Note: to use this publically, we need to add some safeguards, the build system is intentionally powerful, but this also allows for bad actors.
+ * Two general directions:
+ * - we sandbox the glue and chroot the filesystem, this can however be a wackamole situation
+ * - we only allow scripts by URL (unless you are a corporate user) and the URL must live on our cloud and be a validated script
+ * 
+ * Merge scripts need to be validated by us.
+ *  
  * @author alex
  *
  */
@@ -128,6 +144,7 @@ public class GitRepository {
 	
 	private Logger logger = LoggerFactory.getLogger(getClass());
 	private File folder;
+	private String projectName;
 	
 	public static void main(String...args) throws IOException, NoHeadException, GitAPIException {
 		GitRepository gitRepository = new GitRepository(new File("/home/alex/.nabu/repositories/local-test/test"));
@@ -139,10 +156,18 @@ public class GitRepository {
 		gitRepository.checkForUpdates();
 	}
 	
+	public GitRepository(File folder) {
+		this(folder, folder.getName());
+	}
+	
 	// you get a file where a git repository should be
 	// and a branch which you should be listening to / branching off from
-	public GitRepository(File folder) {
+	// the git repository is traditionally _in_ the project, so the root folder is not part of the git repository
+	// however, we do need to know the project name to create valid paths
+	// if left empty, we assume the folder name is the project name
+	public GitRepository(File folder, String projectName) {
 		this.folder = folder;
+		this.projectName = projectName == null ? folder.getName() : projectName;
 		if (!folder.getName().equals(".git")) {
 			folder = new File(folder, ".git");
 		}
@@ -273,9 +298,11 @@ public class GitRepository {
 			MergeResult result = null;
 			// we check if there is a parameter file
 			File file = new File(folder, "merge-result.xml");
+			XMLBinding binding = new XMLBinding((ComplexType) BeanResolver.getInstance().resolve(MergeResult.class), Charset.forName("UTF-8"));
+			binding.setPrettyPrint(true);
+			
 			// if we have a file, load it
 			if (file.exists()) {
-				XMLBinding binding = new XMLBinding((ComplexType) BeanResolver.getInstance().resolve(MergeResult.class), Charset.forName("UTF-8"));
 				try (InputStream input = new BufferedInputStream(new FileInputStream(file))) {
 					result = TypeUtils.getAsBean(binding.unmarshal(input, new Window[0]), MergeResult.class);
 				}
@@ -284,9 +311,8 @@ public class GitRepository {
 			if (result == null) {
 				result = new MergeResult();
 			}
+			result.setStarted(new Date());
 			
-			// TODO: get the current merge result
-			// TODO: run all the merge scripts, store the merge result!
 			GitMethods methods = new GitMethods(this, result, previous == null ? null : getLastCommitOn(previous.getBranch()));
 			
 			EAIResourceRepository instance = EAIResourceRepository.getInstance();
@@ -296,7 +322,35 @@ public class GitRepository {
 			
 			SimpleExecutionEnvironment environment = new SimpleExecutionEnvironment("default");
 			Map<URI, String> resolved = new HashMap<URI, String>();
-			merge(folder, null, repository, methods, resolved, environment);
+			merge(folder, projectName, repository, methods, resolved, environment);
+			
+			MergeState state = MergeState.SUCCEEDED;
+			if (result.getEntries() != null) {
+				for (MergeEntry entry : result.getEntries()) {
+					if (!MergeState.SUCCEEDED.equals(entry.getState())) {
+						// we don't do "ERROR" here, anything that is not finished (either due to error or pending) is considered pending
+						state = MergeState.PENDING;
+						break;
+					}
+				}
+			}
+			result.setState(state);
+			result.setStopped(new Date());
+			// write the merge result
+			try (OutputStream output = new BufferedOutputStream(new FileOutputStream(file))) {
+				binding.marshal(output, new BeanInstance<MergeResult>(result));
+			}
+			
+			GitReleaseCandidate previousRc = current.getLastReleaseCandidate();
+			int candidateVersion = previousRc == null ? 1 : previousRc.getCandidate() + 1;
+			String fullName = current.getBranch() + "-RC" + candidateVersion;
+			
+			// commit the resulting branch
+			git.add().addFilepattern(".").call();
+			git.commit().setAll(true).setMessage("Merged for RC" + candidateVersion).call();
+			Ref call = git.tag().setName(fullName).call();
+			current.getReleaseCandidates().add(new GitReleaseCandidate(call.getName(), candidateVersion));
+			logger.info("Created release candidate '" + fullName + "'");
 		}
 		catch (Exception e) {
 			throw new RuntimeException(e);
@@ -326,7 +380,9 @@ public class GitRepository {
 				GitNode node = (GitNode) getNodeContext().createUnmarshaller().unmarshal(nodeFile);
 				String mergeScript = node.getMergeScript();
 				// if we have a merge script, get cracking
-				if (mergeScript != null && !mergeScript.trim().isEmpty() && path != null) {
+				if (mergeScript != null && !mergeScript.trim().isEmpty()) {
+					logger.info("Merging entry '" + path + "'");
+					
 					// we set the current path as the entry id
 					methods.setCurrentEntryId(path);
 					// get the merge entry
@@ -336,6 +392,7 @@ public class GitRepository {
 					// set the latest metadata from the node
 					merged.setNode(node);
 					
+					StringBuilder scriptLogger = new StringBuilder();
 					try {
 						// we initially assume it was not changed
 						merged.setChanged(false);
@@ -378,16 +435,60 @@ public class GitRepository {
 						);
 						// make sure the execution directory is correct
 						runtime.getContext().put(SystemMethodProvider.CLI_DIRECTORY, folder.getAbsolutePath());
+						runtime.setFormatter(new OutputFormatter() {
+							@Override
+							public void validated(GlueValidation... validations) {
+								// nothing
+							}
+							@Override
+							public void start(Script script) {
+								// nothing								
+							}
+							@Override
+							public boolean shouldExecute(Executor executor) {
+								return true;
+							}
+							@Override
+							public void print(Object... messages) {
+								if (messages != null) {
+									for (Object message : messages) {
+										if (message != null) {
+											scriptLogger.append(message).append("\n");
+										}
+									}
+								}
+							}
+							@Override
+							public void end(Script script, Date started, Date stopped, Exception exception) {
+								// nothing								
+							}
+							@Override
+							public void before(Executor executor) {
+								// nothing								
+							}
+							@Override
+							public void after(Executor executor) {
+								// nothing
+							}
+						});
 						
 						// run the merge script
 						runtime.run();
+						
+						merged.setState(MergeState.SUCCEEDED);
 					}
 					catch (Exception e) {
 						StringWriter stringWriter = new StringWriter();
 						PrintWriter printer = new PrintWriter(stringWriter);
 						e.printStackTrace(printer);
 						printer.flush();
-						merged.setLog(stringWriter.toString());
+						merged.setErrorLog(stringWriter.toString());
+						merged.setState(MergeState.FAILED);
+						logger.error("Could not merge: " + path, e);
+					}
+					// always set the script log, it might help in debugging
+					finally {
+						merged.setLog(scriptLogger.toString());
 					}
 				}
 			}
@@ -511,8 +612,8 @@ public class GitRepository {
 						name = name.replaceAll("^.*/", "");
 						if (name.matches("^r[0-9]+\\.[0-9]+-.+-RC[0-9]+$")) {
 							GitEnvironment environment = getEnvironment(versions, name);
-							String rc = ref.getName().replaceAll(".*-(RC[0-9]+)$", "$1");
-							environment.getReleaseCandidates().add(new GitReleaseCandidate(ref.getName()));
+							String rc = ref.getName().replaceAll(".*-RC([0-9]+)$", "$1");
+							environment.getReleaseCandidates().add(new GitReleaseCandidate(ref.getName(), Integer.parseInt(rc)));
 						}
 					}
 				}

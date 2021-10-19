@@ -31,7 +31,8 @@ public class GitMethods {
 	public byte [] previous(String path) {
 		// if we are in a certain context, get it from the correct context
 		if (currentEntryId != null) {
-			path = currentEntryId.replace(".", "/") + "/" + path.replaceAll("^[/]+", "");
+			// we must remove the leading project name because it is _not_ part of the git repo!
+			path = currentEntryId.replace(".", "/").replaceAll("^[^/]+/", "") + "/" + path.replaceAll("^[/]+", "");
 		}
 		return previousCommit == null ? null : repository.read(path, previousCommit);
 	}

@@ -23,7 +23,7 @@ public class MergeEntry {
 	private List<String> tags;
 	// the id of the entry (only ever nodes?)
 	// we also copy any description to the merge state, this can aid the user in determining what it is about
-	private String entryId, log, description, summary, comment;
+	private String entryId, log, errorLog, description, summary, comment;
 	// the parameters that the user can play with if needed
 	private List<MergeParameter> parameters;
 	// whether or not the user should really check this
@@ -91,5 +91,11 @@ public class MergeEntry {
 		created = node.getCreated();
 		modified = node.getLastModified();
 		tags = node.getTags();
+	}
+	public String getErrorLog() {
+		return errorLog;
+	}
+	public void setErrorLog(String errorLog) {
+		this.errorLog = errorLog;
 	}
 }
