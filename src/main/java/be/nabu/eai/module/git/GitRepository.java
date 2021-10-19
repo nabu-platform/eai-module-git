@@ -1,0 +1,642 @@
+package be.nabu.eai.module.git;
+
+import java.io.BufferedInputStream;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.net.URI;
+import java.nio.charset.Charset;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.SortedSet;
+import java.util.TreeSet;
+
+import javax.xml.bind.JAXBContext;
+
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.PullResult;
+import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.api.errors.NoHeadException;
+import org.eclipse.jgit.lib.ObjectId;
+import org.eclipse.jgit.lib.ObjectLoader;
+import org.eclipse.jgit.lib.ObjectReader;
+import org.eclipse.jgit.lib.Ref;
+import org.eclipse.jgit.revwalk.RevCommit;
+import org.eclipse.jgit.revwalk.RevWalk;
+import org.eclipse.jgit.treewalk.TreeWalk;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import be.nabu.eai.module.git.merge.MergeEntry;
+import be.nabu.eai.module.git.merge.MergeResult;
+import be.nabu.eai.module.git.merge.MergeEntry.MergeState;
+import be.nabu.eai.repository.EAIResourceRepository;
+import be.nabu.glue.api.ExecutionEnvironment;
+import be.nabu.glue.api.Script;
+import be.nabu.glue.core.impl.parsers.GlueParserProvider;
+import be.nabu.glue.core.impl.providers.StaticJavaMethodProvider;
+import be.nabu.glue.core.impl.providers.SystemMethodProvider;
+import be.nabu.glue.core.repositories.DynamicScript;
+import be.nabu.glue.core.repositories.DynamicScriptRepository;
+import be.nabu.glue.impl.SimpleExecutionEnvironment;
+import be.nabu.glue.services.ServiceMethodProvider;
+import be.nabu.glue.utils.ScriptRuntime;
+import be.nabu.libs.resources.URIUtils;
+import be.nabu.libs.types.TypeUtils;
+import be.nabu.libs.types.api.ComplexType;
+import be.nabu.libs.types.binding.api.Window;
+import be.nabu.libs.types.binding.xml.XMLBinding;
+import be.nabu.libs.types.java.BeanResolver;
+import be.nabu.utils.io.IOUtils;
+
+/**
+ * GOALS:
+ * - this should work on any server, either a development server or a dedicated build server
+ * - all necessary metadata should be available in the git repo, no additional external source of information should be necessary (so no database to keep track of stuff)
+ * - ideally we should be able to recover from a failed state (e.G. A server crash halfway a build)
+ * - ideally we want to build without needing the java code to perform merges etc, a pure textual build. this mostly impacts environment-specific properties
+ * 
+ * CONSIDERATIONS:
+ * - we can't work directly on the git repo available in the repository, as this needs to stay in its development branch, we can't go switching branches
+ * - we can't count on being able to check the repository for valid git repositories, as this would make it impossible to run it on a separate server
+ * - we don't want to do squash commits because all the branches are "live", we don't want to kill them off. at some point, dev branch can start working with offshoots that are squashed if necessary
+ * - we can't rebase, as this could incur merge conflicts when environment-specific changes are made and/or hotfixes applied
+ * 
+ * STEPS:
+ * - we merge changes from dev to master, this triggers a new cycle
+ * - we take the last "rx" version where x is the version number, increment it with one and start a branch at the latest commit of the master, e.g. r0, r1, r2,...
+ * - we immediately sub-branch the rx with rx.0, for example r2.0. This is the patch level as hot fixes can be applied directly to rx which will result in an increment in patch number (rx.1, rx.2 etc)
+ * - we look at the last branch and create new subbranches for each environment present there, new environments can be added simply be creating a new branch
+ * 		- BONUS: when a new environment is added, we can "start" from an existing environment, which means all the initial configuration will come from there?
+ * - for each environment branch (rx.0-environment) we check the previous version and automatically merge any environment specific parameters
+ * - then we automatically tag the current state as a release candidate rx.0-environment-RC1
+ * - we offer a web view with a report (required merge vs optional merge) and a way to fill in the correct data
+ * - this is merged into the rx.0-environment branch which is (after commit) again tagged with an increment RC number, e.g. r2.0-qlty-RC2
+ * 
+ * 
+ * - we can deduce the state of the building process by looking at the state of the git repo? if no RC tag 
+ * 
+ * STEPS:
+ * - from dev to master -> squash commit, combined with pull request? post squash is branch niet herbruikbaar, zijbranches van dev?
+ * - we can manually clone a repository containing a project into a folder
+ * - whatever branch it is on, will be the branch that this tool will consider the "main" branch, the default is "master"
+ * 		- might need to explicitly add configuration to use a different branch, otherwise if it is left in a wrong state, it is hard to validate
+ * - if we receive a poll action, we will do a pull from that branch, check if there are any updates
+ * - if there are, we either:
+ * 		- rebase the last release if it is not yet finalized
+ * 		- rebasing the last release might make it hard to correctly merge new environment specific parameters
+ * 			-> although if we assume you don't delete and re-add stuff (at which point the correct parameters are in the previous version)
+ * 			-> we can diff the environment specific against the latest RC (always?)
+ * 			-> this might allow for rebasing
+ * 		- we start a new release if the last release was finalized
+ * - for each environment known in the previous release, we start a new subbranch of the release branch (if not yet available)
+ * - for each environment we create a new release candidate (RC1, RC2,...) (tag!)
+ * 		- note that when rebasing, we can't find branches in the rebased branch, we must check tags to figure out existing RC
+ * 		- further processes must be started (e.g. to create a runnable nabu environment)
+ * - once the user validates a release candidate, we create a new tag v1-STABLE-bebat-qlty. a new release needs to be created (FINAL)
+ * 		- the final release is made for all systems, a new version is automatically started
+ *  
+ *  
+ *  - you can create a new "release" (named or custom versioning) which targets a particular release of a package
+ *  -> e.g. for bebat, we can deploy v24 of the bebat folder (which might be up to v28 looking at the master) and LATEST from the telemetrics package
+ *  -> by default there is always a build for "LATEST"
+ *  
+ * @author alex
+ *
+ */
+// 
+// 
+// -
+// can't work on the actual git repo in the repository, as i need to constantly switch branches etc
+// this would not work in a development scenario
+// we want to be able to work
+
+public class GitRepository {
+	private String branch = "master";
+	// the name of the remote, e.g. "origin"
+	private String remote;
+	private Git git;
+	private SortedSet<GitRelease> versions;
+	
+	private Logger logger = LoggerFactory.getLogger(getClass());
+	private File folder;
+	
+	public static void main(String...args) throws IOException, NoHeadException, GitAPIException {
+		GitRepository gitRepository = new GitRepository(new File("/home/alex/.nabu/repositories/local-test/test"));
+		System.out.println(gitRepository.getVersions());
+//		for (RevCommit commit : gitRepository.getCommitsOn("refs/heads/r1.0")) {
+//			System.out.println("commit on branch: " + commit.getId().getName() + " / " + commit.getAuthorIdent().getWhen());
+//		}
+//		gitRepository.addEnvironment("dev", null);
+		gitRepository.checkForUpdates();
+	}
+	
+	// you get a file where a git repository should be
+	// and a branch which you should be listening to / branching off from
+	public GitRepository(File folder) {
+		this.folder = folder;
+		if (!folder.getName().equals(".git")) {
+			folder = new File(folder, ".git");
+		}
+		if (!folder.exists()) {
+			throw new IllegalArgumentException("Git folder does not exist: " + folder);
+		}
+		try {
+			git = Git.open(folder);
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+	
+	public void addEnvironment(String name, String copyFromOther) {
+		GitPatch lastPatch = getLastVersion().getLastPatch();
+		GitEnvironment originalEnvironment = null;
+		if (copyFromOther != null) {
+			List<GitEnvironment> environments = lastPatch.getEnvironments();
+			for (GitEnvironment environment : environments) {
+				if (copyFromOther.equals(environment.getName())) {
+					originalEnvironment = environment;
+					break;
+				}
+			}
+		}
+		createEnvironmentBranch(lastPatch.getRelease(), lastPatch, name, originalEnvironment);
+	}
+	
+	synchronized public void checkForUpdates() {
+		try {
+			// switch to the correct branch
+			git.checkout().setName(branch).call();
+			
+			// if you have not configured a remote, we can't pull
+			// you might be committing straight to the branch
+			if (remote != null) {
+				// pull the latest data
+				logger.info("Pulling last data for branch '" + branch + "' from '" + remote + "'");
+				PullResult call = git.pull().setRemote(remote).call();
+				if (!call.getMergeResult().getConflicts().isEmpty()) {
+					throw new RuntimeException("Merge conflicts detected: " + call);
+				}
+			}
+			
+			RevCommit lastCommitOn = getLastCommitOn(branch);
+			// need at least 1 commit
+			if (lastCommitOn != null) {
+				// check it against the last version
+				GitRelease lastVersion = getLastVersion();
+				// if no version or the last commit is beyond that version, we need a new version
+				if (lastVersion == null || lastVersion.getDate().before(GitUtils.getCommitDate(lastCommitOn))) {
+					GitRelease newVersion = new GitRelease(lastVersion == null ? 1 : lastVersion.getVersion() + 1);
+					String newBranchName = "r" + newVersion.getVersion();
+					logger.info("Found a new commit on branch '" + branch + "', creating version '" + newBranchName + "'");
+					
+					// we create the new branch
+					git.branchCreate().setName(newBranchName).call();
+					git.checkout().setName(newBranchName).call();
+					
+					GitPatch patch = new GitPatch(newVersion, 0);
+					// immediately create a fix version 0 branch
+					git.branchCreate().setName(newBranchName + "." + patch.getPatch()).call();
+					newVersion.getPatchVersions().add(patch);
+					
+					logger.info("Created patch version version '" + patch.getBranch() + "'");
+					
+					// if we have a last version, we need to check for environments
+					if (lastVersion != null) {
+						SortedSet<GitPatch> patchVersions = lastVersion.getPatchVersions();
+						if (!patchVersions.isEmpty()) {
+							List<GitEnvironment> environments = patchVersions.last().getEnvironments();
+							if (environments != null) {
+								for (GitEnvironment environment : environments) {
+									createEnvironmentBranch(newVersion, patch, environment.getName(), environment);
+								}
+							}
+						}
+					}
+					getVersions().add(newVersion);
+					// back to the original one
+					git.checkout().setName(branch).call();
+				}
+			}
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+	
+	// we create an environment branch with a given name
+	// if there is an original, we use that to merge data
+	synchronized private void createEnvironmentBranch(GitRelease release, GitPatch patch, String name, GitEnvironment original) {
+		String branchName = "r" + release.getVersion() + "." + patch.getPatch();
+		try {
+			// go to the correct branch
+			git.checkout().setName(branchName).call();
+			// create the branch for the environment
+			String environmentBranch = branchName + "-" + name;
+			// create a new branch for the environment
+			git.branchCreate().setName(environmentBranch).call();
+			
+			logger.info("Created new environment '" + environmentBranch + "'");
+			
+			GitEnvironment environment = new GitEnvironment(patch, name);
+			patch.getEnvironments().add(environment);
+			
+			merge(environment, original);
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+	
+	// every method that performs a checkout, needs a lock to do so
+	synchronized private void merge(GitEnvironment current, GitEnvironment previous) {
+		try {
+			if (previous == null) {
+				logger.info("Merging environment '" + current.getBranch() + "'");
+			}
+			else {
+				logger.info("Merging environment '" + current.getBranch() + "' from '" + previous.getBranch() + "'");
+			}
+			
+			// switch to that branch
+			git.checkout().setName(current.getBranch()).call();
+			
+			MergeResult result = null;
+			// we check if there is a parameter file
+			File file = new File(folder, "merge-result.xml");
+			// if we have a file, load it
+			if (file.exists()) {
+				XMLBinding binding = new XMLBinding((ComplexType) BeanResolver.getInstance().resolve(MergeResult.class), Charset.forName("UTF-8"));
+				try (InputStream input = new BufferedInputStream(new FileInputStream(file))) {
+					result = TypeUtils.getAsBean(binding.unmarshal(input, new Window[0]), MergeResult.class);
+				}
+			}
+			// if we don't have a merge result available, create a new one
+			if (result == null) {
+				result = new MergeResult();
+			}
+			
+			// TODO: get the current merge result
+			// TODO: run all the merge scripts, store the merge result!
+			GitMethods methods = new GitMethods(this, result, previous == null ? null : getLastCommitOn(previous.getBranch()));
+			
+			EAIResourceRepository instance = EAIResourceRepository.getInstance();
+			GlueParserProvider parserProvider = new GlueParserProvider(new ServiceMethodProvider(instance, instance), new StaticJavaMethodProvider(methods));
+			
+			DynamicScriptRepository repository = new DynamicScriptRepository(parserProvider);
+			
+			SimpleExecutionEnvironment environment = new SimpleExecutionEnvironment("default");
+			Map<URI, String> resolved = new HashMap<URI, String>();
+			merge(folder, null, repository, methods, resolved, environment);
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+	
+	private JAXBContext nodeContext;
+	
+	private JAXBContext getNodeContext() {
+		if (nodeContext == null) {
+			try {
+				nodeContext = JAXBContext.newInstance(GitNode.class);
+			}
+			catch (Exception e) {
+				throw new RuntimeException(e);
+			}
+		}
+		return nodeContext;
+	}
+	
+	// the path is the "." separated entry id path
+	private void merge(File folder, String path, DynamicScriptRepository repository, GitMethods methods, Map<URI, String> resolved, ExecutionEnvironment environment) {
+		// check if we have a node
+		File nodeFile = new File(folder, "node.xml");
+		if (nodeFile.exists()) {
+			try {
+				GitNode node = (GitNode) getNodeContext().createUnmarshaller().unmarshal(nodeFile);
+				String mergeScript = node.getMergeScript();
+				// if we have a merge script, get cracking
+				if (mergeScript != null && !mergeScript.trim().isEmpty() && path != null) {
+					// we set the current path as the entry id
+					methods.setCurrentEntryId(path);
+					// get the merge entry
+					MergeEntry merged = methods.merged();
+					// always set to pending before we begin
+					merged.setState(MergeState.PENDING);
+					// set the latest metadata from the node
+					merged.setNode(node);
+					
+					try {
+						// we initially assume it was not changed
+						merged.setChanged(false);
+						
+						// get the previous version of the node.xml
+						byte[] previous = methods.previous("node.xml");
+						// compare the node properties to see if it was changed
+						if (previous != null) {
+							GitNode previousNode = (GitNode) getNodeContext().createUnmarshaller().unmarshal(new ByteArrayInputStream(previous));
+							if (!previousNode.getLastModified().equals(node.getLastModified()) || !previousNode.getEnvironmentId().equals(node.getEnvironmentId()) || previousNode.getVersion() != node.getVersion()) {
+								merged.setChanged(true);
+							}
+						}
+						// if it did not exist before, it is definitely a change
+						else {
+							merged.setChanged(true);
+						}
+						
+						Script script;
+						// if we detect a URL, we load it in remotely
+						if (mergeScript.trim().matches("^[\\w]+://.*$")) {
+							script = getScript(repository, new URI(URIUtils.encodeURI(mergeScript)), resolved);
+						}
+						else {
+							script = new DynamicScript(
+								path.indexOf('.') > 0 ? path.replaceAll("^(.*)\\.[^.]+$", "$1") : null,
+								path.indexOf('.') > 0 ? path.replaceAll("^.*\\.([^.]+)$", "$1") : path,
+								repository,
+								Charset.forName("UTF-8"),
+								null
+							);
+							((DynamicScript) script).setContent(mergeScript);
+						}
+						
+						ScriptRuntime runtime = new ScriptRuntime(
+							script, 
+							environment,
+							false, 
+							null
+						);
+						// make sure the execution directory is correct
+						runtime.getContext().put(SystemMethodProvider.CLI_DIRECTORY, folder.getAbsolutePath());
+						
+						// run the merge script
+						runtime.run();
+					}
+					catch (Exception e) {
+						StringWriter stringWriter = new StringWriter();
+						PrintWriter printer = new PrintWriter(stringWriter);
+						e.printStackTrace(printer);
+						printer.flush();
+						merged.setLog(stringWriter.toString());
+					}
+				}
+			}
+			catch (Exception e) {
+				throw new RuntimeException(e);
+			}
+		}
+		// otherwise, we recurse to other directories, as long as they are not internal
+		else {
+			for (File child : folder.listFiles()) {
+				if (EAIResourceRepository.isValidName(child.getName()) && child.isDirectory()) {
+					String childPath = (path == null ? "" : path + ".") + child.getName();
+					merge(child, childPath, repository, methods, resolved, environment);
+				}
+			}
+		}
+	}
+	
+	private Script getScript(DynamicScriptRepository repository, URI uri, Map<URI, String> resolved) {
+		try {
+			if (!resolved.containsKey(uri)) {
+				String name = "merge" + resolved.size();
+				try (InputStream input = new BufferedInputStream(uri.toURL().openStream())) {
+					DynamicScript script = new DynamicScript(
+						null,
+						name,
+						repository,
+						Charset.forName("UTF-8"),
+						null
+					);
+					byte[] bytes = IOUtils.toBytes(IOUtils.wrap(input));
+					script.setContent(new String(bytes, Charset.forName("UTF-8")));
+					repository.add(script);
+					resolved.put(uri, name);
+				}
+			}
+			return repository.getScript(resolved.get(uri));
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+	
+	private static byte[] read(File file) {
+		try {
+			try (InputStream input = new BufferedInputStream(new FileInputStream(file))) {
+				return IOUtils.toBytes(IOUtils.wrap(input));
+			}
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+	
+	public byte[] read(String path, RevCommit commit) {
+		try {
+			try (TreeWalk treeWalk = TreeWalk.forPath(git.getRepository(), path, commit.getTree())) {
+				ObjectId blobId = treeWalk.getObjectId(0);
+				try (ObjectReader objectReader = git.getRepository().newObjectReader()) {
+					ObjectLoader objectLoader = objectReader.open(blobId);
+					byte[] bytes = objectLoader.getBytes();
+					return bytes;
+				}
+			}
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+	
+	/**
+	 * A version is an offshoot from the master branch, triggered as new commits are pushed to the master.
+	 * As each commit triggers a new version, this will go up rapidly, not all of them will make it into another environment.
+	 * Very likely you want to additionally tag "major" points, e.g. a production release.
+	 * So "r152" might actually amount to "v1.1" if that is the point you decide to deploy to prd (which can be considered the end of a cycle)
+	 * Because the "v" syntax is often used for manual tagging and we want to avoid warnings from git: warning: refname 'v1.0-qlty' is ambiguous.
+	 * We use the "r" syntax
+	 * 
+	 * That means a version on the master branch is r1, r2, r3...
+	 * 
+	 * You can create a patch version, e.g. r1.1. This is optional and done as a straight branch on r1 in this case.
+	 */
+	private SortedSet<GitRelease> getVersions() {
+		if (versions == null) {
+			synchronized(this) {
+				if (versions == null) {
+					versions = new TreeSet<GitRelease>(new Comparator<GitRelease>() {
+						@Override
+						public int compare(GitRelease releaseA, GitRelease releaseB) {
+							return releaseA.getVersion() - releaseB.getVersion();
+						}
+					});
+					// by default this only gets local branches, not remote
+					// to include remote:
+					// new Git(repository).branchList().setListMode(ListMode.ALL).call();
+					for (Ref ref : getBranches()) {
+						System.out.println("found branch ref: " + ref.getName());
+						String name = ref.getName();
+						// e.g. refs/heads/master
+						name = name.replaceAll("^.*/", "");
+						// an actual release version
+						if (name.matches("^r[0-9]+$")) {
+							GitRelease version = getVersion(versions, name);
+							version.setReference(ref.getName());
+							version.setCommit(getCommit(ref));
+						}
+						else if (name.matches("^r[0-9]+\\.[0-9]+$")) {
+							GitPatch patchVersion = getPatchVersion(versions, name);
+							patchVersion.setReference(ref.getName());
+							patchVersion.setCommit(getCommit(ref));
+						}
+						else if (name.matches("^r[0-9]+\\.[0-9]+-.+$")) {
+							GitEnvironment environment = getEnvironment(versions, name);
+							environment.setReference(ref.getName());
+							environment.setCommit(getCommit(ref));
+						}
+					}
+					for (Ref ref : getTags()) {
+						String name = ref.getName();
+						System.out.println("tag: " +name + " :: " + ref.getObjectId() + " :: " + ref.getLeaf());
+						name = name.replaceAll("^.*/", "");
+						if (name.matches("^r[0-9]+\\.[0-9]+-.+-RC[0-9]+$")) {
+							GitEnvironment environment = getEnvironment(versions, name);
+							String rc = ref.getName().replaceAll(".*-(RC[0-9]+)$", "$1");
+							environment.getReleaseCandidates().add(new GitReleaseCandidate(ref.getName()));
+						}
+					}
+				}
+			}
+		}
+		return versions;
+	}
+	
+	private GitRelease getLastVersion() {
+		SortedSet<GitRelease> versions = getVersions();
+		return versions.isEmpty() ? null : versions.last();
+	}
+	
+	// require the full name like refs/heads/master
+	private Iterable<RevCommit> getCommitsOn(String name) {
+		try {
+			return git.log().add(git.getRepository().resolve(name)).call();
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+	
+	private RevCommit getLastCommitOn(String name) {
+		Iterable<RevCommit> commitsOn = getCommitsOn(name);
+		Iterator<RevCommit> iterator = commitsOn.iterator();
+		if (iterator.hasNext()) {
+			return iterator.next();
+		}
+		return null;
+	}
+
+	// full name:
+	// r1.0-qlty
+	private static GitRelease getVersion(Collection<GitRelease> versions, String name) {
+		if (!name.matches("^r[0-9]+.*")) {
+			throw new IllegalArgumentException("Not a version: " + name);
+		}
+		name = name.replaceAll("^(r[0-9]+).*", "$1");
+		int version = Integer.parseInt(name.substring(1));
+		GitRelease existing = null;
+		for (GitRelease possible : versions) {
+			if (possible.getVersion() == version) {
+				existing = possible;
+				break;
+			}
+		}
+		if (existing == null) {
+			existing = new GitRelease(version);
+			versions.add(existing);
+		}
+		return existing;
+	}
+	
+	private static GitPatch getPatchVersion(Collection<GitRelease> versions, String name) {
+		if (!name.matches("^r[0-9]+\\.[0-9]+.*")) {
+			throw new IllegalArgumentException("Not a patch version: " + name);
+		}
+		name = name.replaceAll("^(r[0-9]+\\.[0-9]+).*", "$1");
+		String[] parts = name.split("\\.");
+		GitRelease release = getVersion(versions, name);
+		int patch = Integer.parseInt(parts[1]);
+		GitPatch existing = null;
+		for (GitPatch possible : release.getPatchVersions()) {
+			if (possible.getPatch() == patch) {
+				existing = possible;
+				break;
+			}
+		}
+		if (existing == null) {
+			existing = new GitPatch(release, patch);
+			release.getPatchVersions().add(existing);
+		}
+		return existing;
+	}
+	
+	private static GitEnvironment getEnvironment(Collection<GitRelease> versions, String name) {
+		if (!name.matches("^r[0-9]+\\.[0-9]+.*-.+")) {
+			throw new IllegalArgumentException("Not an environment version: " + name);
+		}
+		// remove any mention of RC from the name
+		name = name.replaceAll("^(.*?)-RC[0-9]+$", "$1");
+		GitPatch patchVersion = getPatchVersion(versions, name);
+		// anything after the first '-' is the name of the environment
+		String environment = name.substring(name.indexOf('-') + 1);
+		GitEnvironment existing = null;
+		for (GitEnvironment potential : patchVersion.getEnvironments()) {
+			if (potential.getName().equals(environment)) {
+				existing = potential;
+				break;
+			}
+		}
+		if (existing == null) {
+			existing = new GitEnvironment(patchVersion, environment);
+			patchVersion.getEnvironments().add(existing);
+		}
+		return existing;
+	}
+	
+	private RevCommit getCommit(Ref ref) {
+		try (RevWalk revWalk = new RevWalk(git.getRepository())) {
+			return revWalk.parseCommit(ref.getObjectId());
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+	
+	private List<Ref> getBranches() {
+		try {
+			return git.branchList().call();
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+	
+	private List<Ref> getTags() {
+		try {
+			return git.tagList().call();
+//			return git.getRepository().getRefDatabase().getRefsByPrefix(Constants.R_TAGS);
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+}
