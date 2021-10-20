@@ -103,6 +103,16 @@
 			<scope>provided</scope>
 		</dependency>
 		<dependency>
+			<groupId>be.nabu.glue</groupId>
+			<artifactId>glue-json</artifactId>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>be.nabu.glue</groupId>
+			<artifactId>glue-xml</artifactId>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
 			<groupId>org.slf4j</groupId>
 			<artifactId>slf4j-api</artifactId>
 			<scope>provided</scope>

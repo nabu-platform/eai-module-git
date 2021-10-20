@@ -58,8 +58,8 @@ public class GitEnvironment extends GitReference {
 	public void setPatch(GitPatch patch) {
 		this.patch = patch;
 	}
-	
 	public String getBranch() {
 		return patch.getBranch() + "-" + name;
 	}
+	
 }

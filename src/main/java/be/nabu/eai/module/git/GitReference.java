@@ -2,6 +2,8 @@ package be.nabu.eai.module.git;
 
 import java.util.Date;
 
+import javax.xml.bind.annotation.XmlTransient;
+
 import org.eclipse.jgit.revwalk.RevCommit;
 
 public class GitReference {
@@ -10,6 +12,7 @@ public class GitReference {
 	private String commit;
 	private Date date;
 	private String author, email;
+	private RevCommit revCommit;
 	
 	public GitReference() {
 		// auto
@@ -43,8 +46,17 @@ public class GitReference {
 		author = commit.getAuthorIdent().getName();
 		email = commit.getAuthorIdent().getEmailAddress();
 		this.commit = commit.getId().getName();
+		this.revCommit = commit;
 		
 		System.out.println("set: " + date + " :: " + author + " :: " + this.commit);
+	}
+	
+	@XmlTransient
+	public RevCommit getRevCommit() {
+		return revCommit;
+	}
+	public void setRevCommit(RevCommit revCommit) {
+		this.revCommit = revCommit;
 	}
 	
 	public Date getDate() {

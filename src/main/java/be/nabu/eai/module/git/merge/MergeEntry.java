@@ -8,7 +8,6 @@ import javax.xml.bind.annotation.XmlTransient;
 
 import be.nabu.eai.module.git.GitNode;
 
-// TODO: a state? the result of the merge
 public class MergeEntry {
 	
 	public enum MergeState {
@@ -97,5 +96,23 @@ public class MergeEntry {
 	}
 	public void setErrorLog(String errorLog) {
 		this.errorLog = errorLog;
+	}
+	public List<String> getTags() {
+		return tags;
+	}
+	public void setTags(List<String> tags) {
+		this.tags = tags;
+	}
+	public Date getCreated() {
+		return created;
+	}
+	public void setCreated(Date created) {
+		this.created = created;
+	}
+	public Date getModified() {
+		return modified;
+	}
+	public void setModified(Date modified) {
+		this.modified = modified;
 	}
 }

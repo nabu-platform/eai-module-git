@@ -6,7 +6,7 @@ import java.util.TreeSet;
 
 public class GitRelease extends GitReference {
 	private int version;
-	private SortedSet<GitPatch> patchVersions;
+	private TreeSet<GitPatch> patchVersions;
 	
 	public GitRelease(int version) {
 		this.version = version;
@@ -23,7 +23,7 @@ public class GitRelease extends GitReference {
 		return !patchVersions.isEmpty() ? patchVersions.last() : null;
 	}
 	
-	public SortedSet<GitPatch> getPatchVersions() {
+	public TreeSet<GitPatch> getPatchVersions() {
 		if (patchVersions == null) {
 			synchronized(this) {
 				if (patchVersions == null) {		
@@ -38,7 +38,7 @@ public class GitRelease extends GitReference {
 		}
 		return patchVersions;
 	}
-	public void setPatchVersions(SortedSet<GitPatch> patchVersions) {
+	public void setPatchVersions(TreeSet<GitPatch> patchVersions) {
 		this.patchVersions = patchVersions;
 	}
 	

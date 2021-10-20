@@ -28,7 +28,10 @@ import javax.xml.bind.JAXBContext;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.PullResult;
 import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.api.errors.InvalidRefNameException;
 import org.eclipse.jgit.api.errors.NoHeadException;
+import org.eclipse.jgit.api.errors.RefAlreadyExistsException;
+import org.eclipse.jgit.api.errors.RefNotFoundException;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectLoader;
 import org.eclipse.jgit.lib.ObjectReader;
@@ -140,7 +143,9 @@ public class GitRepository {
 	// the name of the remote, e.g. "origin"
 	private String remote;
 	private Git git;
-	private SortedSet<GitRelease> versions;
+	private TreeSet<GitRelease> versions;
+	// how many versions we check
+	private int secondaryDepth = 0;
 	
 	private Logger logger = LoggerFactory.getLogger(getClass());
 	private File folder;
@@ -153,7 +158,8 @@ public class GitRepository {
 //			System.out.println("commit on branch: " + commit.getId().getName() + " / " + commit.getAuthorIdent().getWhen());
 //		}
 //		gitRepository.addEnvironment("dev", null);
-		gitRepository.checkForUpdates();
+		gitRepository.checkForPrimaryUpdates();
+		gitRepository.checkForSecondaryUpdates();
 	}
 	
 	public GitRepository(File folder) {
@@ -197,7 +203,92 @@ public class GitRepository {
 		createEnvironmentBranch(lastPatch.getRelease(), lastPatch, name, originalEnvironment);
 	}
 	
-	synchronized public void checkForUpdates() {
+	// secondary updates are on separate branches, we check the last commits to see if we have for example applied a hotfix, or changed the settings of a particular RC candidate
+	synchronized public void checkForSecondaryUpdates() {
+		// originally the plan was to walk over the last x commits and check which branches they applied to, assuming this would be the fastest way
+		// but git does not keep track of which branch a commit was originally committed on as a commit can be applied to multiple branches, branches can be renamed etc while a commit is immutable
+		// we _can_ ask if a commit was applied to a particular branch, but that would mean looping over commits and for each commit looping over the branches to see if it was committed
+//		try {
+//			RevWalk walk = new RevWalk(git.getRepository());
+//			for (RevCommit commit : git.log().call()) {
+//				for (Ref branch : getBranches()) {
+////					walk.isMergedInto(base, tip);
+//				}
+//			}
+//		}
+//		catch (Exception e) {
+//			throw new RuntimeException(e);
+//		}
+		// so instead we will check all (or only the last x?) releases to see if they saw an update.
+		int counter = 0;
+		for (GitRelease version : getVersions().descendingSet()) {
+			try {
+				// we can have a new commit on a version, this would result in a new patch version
+				// we check this by comparing the commit date of the last patch with the last commit on this branch
+				RevCommit lastCommitOn = getLastCommitOn(version.getBranch());
+				GitPatch lastPatch = version.getLastPatch();
+
+				if (lastCommitOn != null) {
+					// the last patch should not be null unless you are doing manual shenanigans
+					if (lastPatch == null || GitUtils.getCommitDate(lastCommitOn).after(lastPatch.getDate())) {
+						int patchVersion = lastPatch == null ? 0 : lastPatch.getPatch() + 1;
+						logger.info("Hotfix found for r" + version.getVersion() + ", creating new patch version r" + version.getVersion() + "." + patchVersion);
+						createPatch(version, patchVersion);
+					}
+					
+					counter++;
+					if (secondaryDepth > 0 && counter > secondaryDepth) {
+						break;
+					}
+				}
+				
+				// we should not have commits on a patch version itself, but we can have additional commits on an environment branch
+				// in theory there should only be changes to the last patch version, for performance reasons we'll assume that for now
+				// in the future we could scan all patch versions
+				if (lastPatch != null) {
+					for (GitEnvironment environment : lastPatch.getEnvironments()) {
+						lastCommitOn = getLastCommitOn(environment.getBranch());
+						if (lastCommitOn != null) {
+							// if we have a commit after the last release candidate, we must perform a new merge
+							GitReleaseCandidate lastReleaseCandidate = environment.getLastReleaseCandidate();
+							if (lastReleaseCandidate == null || GitUtils.getCommitDate(lastCommitOn).after(lastReleaseCandidate.getDate())) {
+								logger.info("Detected change to environment: " + environment.getBranch());
+								// get the last environment to check against
+								GitEnvironment last = null;
+								GitPatch previousPatch = null;
+								// we can check the previous patch
+								if (lastPatch.getPatch() > 0) {
+									previousPatch = version.getPatchVersions().lower(lastPatch);
+								}
+								// otherwise, we have to look at the previous version
+								else {
+									GitRelease previousVersion = getVersions().lower(version);
+									if (previousVersion != null) {
+										previousPatch = previousVersion.getLastPatch();
+									}
+								}
+								if (previousPatch != null) {
+									for (GitEnvironment potential : previousPatch.getEnvironments()) {
+										if (potential.getName().equals(environment.getName())) {
+											last = potential;
+											break;
+										}
+									}
+								}
+								merge(environment, last);
+							}
+						}
+					}
+				}
+			}
+			catch (Exception e) {
+				logger.error("Could not scan version r" + version.getVersion(), e);
+			}
+		}
+	}
+	
+	// a primary update is on the "master" branch
+	synchronized public void checkForPrimaryUpdates() {
 		try {
 			// switch to the correct branch
 			git.checkout().setName(branch).call();
@@ -224,38 +315,54 @@ public class GitRepository {
 					String newBranchName = "r" + newVersion.getVersion();
 					logger.info("Found a new commit on branch '" + branch + "', creating version '" + newBranchName + "'");
 					
-					// we create the new branch
-					git.branchCreate().setName(newBranchName).call();
-					git.checkout().setName(newBranchName).call();
-					
-					GitPatch patch = new GitPatch(newVersion, 0);
-					// immediately create a fix version 0 branch
-					git.branchCreate().setName(newBranchName + "." + patch.getPatch()).call();
-					newVersion.getPatchVersions().add(patch);
-					
-					logger.info("Created patch version version '" + patch.getBranch() + "'");
-					
-					// if we have a last version, we need to check for environments
-					if (lastVersion != null) {
-						SortedSet<GitPatch> patchVersions = lastVersion.getPatchVersions();
-						if (!patchVersions.isEmpty()) {
-							List<GitEnvironment> environments = patchVersions.last().getEnvironments();
-							if (environments != null) {
-								for (GitEnvironment environment : environments) {
-									createEnvironmentBranch(newVersion, patch, environment.getName(), environment);
-								}
-							}
-						}
-					}
 					getVersions().add(newVersion);
-					// back to the original one
-					git.checkout().setName(branch).call();
+					// we create the new branch
+					Ref call = git.branchCreate().setName(newBranchName).call();
+					newVersion.setCommit(getCommit(call));
+					createPatch(newVersion, 0);
 				}
 			}
 		}
 		catch (Exception e) {
 			throw new RuntimeException(e);
 		}
+	}
+
+	synchronized private GitPatch createPatch(GitRelease newVersion, int patchVersion) throws GitAPIException, RefAlreadyExistsException, RefNotFoundException, InvalidRefNameException {
+		git.checkout().setName(newVersion.getBranch()).call();
+		GitPatch patch = new GitPatch(newVersion, patchVersion);
+		// immediately create a fix version 0 branch
+		Ref call = git.branchCreate().setName(patch.getBranch()).call();
+		patch.setCommit(getCommit(call));
+		
+		logger.info("Created patch version version '" + patch.getBranch() + "'");
+		
+		// if we started a new patch version, we have to look at the previous release to find the environments
+		if (patchVersion == 0) {
+			GitRelease previousVersion = getVersions().lower(newVersion);
+			// if we have a previous version, go with that
+			if (previousVersion != null) {
+				GitPatch lastPatch = previousVersion.getLastPatch();
+				if (lastPatch != null) {
+					for (GitEnvironment environment : lastPatch.getEnvironments()) {
+						createEnvironmentBranch(newVersion, patch, environment.getName(), environment);
+					}
+				}
+			}
+		}
+		// otherwise, we get the last patch from the current version
+		else {
+			GitPatch lastPatch = newVersion.getLastPatch();
+			if (lastPatch != null) {
+				for (GitEnvironment environment : lastPatch.getEnvironments()) {
+					createEnvironmentBranch(newVersion, patch, environment.getName(), environment);
+				}
+			}
+		}
+		newVersion.getPatchVersions().add(patch);
+		// back to the original one
+		git.checkout().setName(branch).call();
+		return patch;
 	}
 	
 	// we create an environment branch with a given name
@@ -268,11 +375,12 @@ public class GitRepository {
 			// create the branch for the environment
 			String environmentBranch = branchName + "-" + name;
 			// create a new branch for the environment
-			git.branchCreate().setName(environmentBranch).call();
+			Ref call = git.branchCreate().setName(environmentBranch).call();
 			
 			logger.info("Created new environment '" + environmentBranch + "'");
 			
 			GitEnvironment environment = new GitEnvironment(patch, name);
+			environment.setCommit(getCommit(call));
 			patch.getEnvironments().add(environment);
 			
 			merge(environment, original);
@@ -313,7 +421,17 @@ public class GitRepository {
 			}
 			result.setStarted(new Date());
 			
-			GitMethods methods = new GitMethods(this, result, previous == null ? null : getLastCommitOn(previous.getBranch()));
+			RevCommit previousCommit = previous == null ? null : getLastCommitOn(previous.getBranch());
+			
+			MergeResult previousResult = null;
+			if (previousCommit != null) {
+				byte[] read = read("merge-result.xml", previousCommit);
+				if (read != null) {
+					previousResult = TypeUtils.getAsBean(binding.unmarshal(new ByteArrayInputStream(read), new Window[0]), MergeResult.class);
+				}
+			}
+			
+			GitMethods methods = new GitMethods(this, result, previousResult, previousCommit);
 			
 			EAIResourceRepository instance = EAIResourceRepository.getInstance();
 			GlueParserProvider parserProvider = new GlueParserProvider(new ServiceMethodProvider(instance, instance), new StaticJavaMethodProvider(methods));
@@ -349,8 +467,12 @@ public class GitRepository {
 			git.add().addFilepattern(".").call();
 			git.commit().setAll(true).setMessage("Merged for RC" + candidateVersion).call();
 			Ref call = git.tag().setName(fullName).call();
-			current.getReleaseCandidates().add(new GitReleaseCandidate(call.getName(), candidateVersion));
+			GitReleaseCandidate rc = new GitReleaseCandidate(call.getName(), candidateVersion);
+			rc.setCommit(getCommit(call));
+			current.getReleaseCandidates().add(rc);
 			logger.info("Created release candidate '" + fullName + "'");
+			// switch back to the main branch
+			git.checkout().setName(branch).call();
 		}
 		catch (Exception e) {
 			throw new RuntimeException(e);
@@ -398,7 +520,7 @@ public class GitRepository {
 						merged.setChanged(false);
 						
 						// get the previous version of the node.xml
-						byte[] previous = methods.previous("node.xml");
+						byte[] previous = methods.previousContent("node.xml");
 						// compare the node properties to see if it was changed
 						if (previous != null) {
 							GitNode previousNode = (GitNode) getNodeContext().createUnmarshaller().unmarshal(new ByteArrayInputStream(previous));
@@ -546,12 +668,15 @@ public class GitRepository {
 	public byte[] read(String path, RevCommit commit) {
 		try {
 			try (TreeWalk treeWalk = TreeWalk.forPath(git.getRepository(), path, commit.getTree())) {
-				ObjectId blobId = treeWalk.getObjectId(0);
-				try (ObjectReader objectReader = git.getRepository().newObjectReader()) {
-					ObjectLoader objectLoader = objectReader.open(blobId);
-					byte[] bytes = objectLoader.getBytes();
-					return bytes;
+				if (treeWalk != null) {
+					ObjectId blobId = treeWalk.getObjectId(0);
+					try (ObjectReader objectReader = git.getRepository().newObjectReader()) {
+						ObjectLoader objectLoader = objectReader.open(blobId);
+						byte[] bytes = objectLoader.getBytes();
+						return bytes;
+					}
 				}
+				return null;
 			}
 		}
 		catch (Exception e) {
@@ -571,7 +696,7 @@ public class GitRepository {
 	 * 
 	 * You can create a patch version, e.g. r1.1. This is optional and done as a straight branch on r1 in this case.
 	 */
-	private SortedSet<GitRelease> getVersions() {
+	private TreeSet<GitRelease> getVersions() {
 		if (versions == null) {
 			synchronized(this) {
 				if (versions == null) {
@@ -613,7 +738,9 @@ public class GitRepository {
 						if (name.matches("^r[0-9]+\\.[0-9]+-.+-RC[0-9]+$")) {
 							GitEnvironment environment = getEnvironment(versions, name);
 							String rc = ref.getName().replaceAll(".*-RC([0-9]+)$", "$1");
-							environment.getReleaseCandidates().add(new GitReleaseCandidate(ref.getName(), Integer.parseInt(rc)));
+							GitReleaseCandidate releaseCandidate = new GitReleaseCandidate(ref.getName(), Integer.parseInt(rc));
+							releaseCandidate.setCommit(getCommit(ref));
+							environment.getReleaseCandidates().add(releaseCandidate);
 						}
 					}
 				}
@@ -627,7 +754,7 @@ public class GitRepository {
 		return versions.isEmpty() ? null : versions.last();
 	}
 	
-	// require the full name like refs/heads/master
+	// can use the full name like refs/heads/master or just "master"
 	private Iterable<RevCommit> getCommitsOn(String name) {
 		try {
 			return git.log().add(git.getRepository().resolve(name)).call();
@@ -694,8 +821,8 @@ public class GitRepository {
 		if (!name.matches("^r[0-9]+\\.[0-9]+.*-.+")) {
 			throw new IllegalArgumentException("Not an environment version: " + name);
 		}
-		// remove any mention of RC from the name
-		name = name.replaceAll("^(.*?)-RC[0-9]+$", "$1");
+		// remove any mention of RC or final from the name
+		name = name.replaceAll("^(.*?)-(RC[0-9]+|FINAL)$", "$1");
 		GitPatch patchVersion = getPatchVersion(versions, name);
 		// anything after the first '-' is the name of the environment
 		String environment = name.substring(name.indexOf('-') + 1);

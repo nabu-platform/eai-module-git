@@ -11,8 +11,8 @@ public class MergeParameter {
 	private String category, name, title, type, current, previous, raw;
 	// a description for the user
 	private String description;
-	// whether or not the parameter is optional
-	private boolean optional;
+	// whether or not the parameter is optional and/or (potentially) encrypted
+	private boolean optional, encrypted;
 
 	public String getName() {
 		return name;
@@ -67,5 +67,11 @@ public class MergeParameter {
 	}
 	public void setDescription(String description) {
 		this.description = description;
+	}
+	public boolean isEncrypted() {
+		return encrypted;
+	}
+	public void setEncrypted(boolean encrypted) {
+		this.encrypted = encrypted;
 	}
 }

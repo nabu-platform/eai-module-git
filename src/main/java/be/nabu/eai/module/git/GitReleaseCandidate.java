@@ -3,6 +3,7 @@ package be.nabu.eai.module.git;
 public class GitReleaseCandidate extends GitReference {
 	
 	private int candidate;
+	private boolean finalized;
 	
 	public GitReleaseCandidate(String reference, int candidate) {
 		super(reference);
@@ -21,4 +22,11 @@ public class GitReleaseCandidate extends GitReference {
 	public void setCandidate(int candidate) {
 		this.candidate = candidate;
 	}
+	public boolean isFinalized() {
+		return finalized;
+	}
+	public void setFinalized(boolean finalized) {
+		this.finalized = finalized;
+	}
+	
 }
