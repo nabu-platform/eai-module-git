@@ -11,7 +11,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.net.MalformedURLException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.Charset;
 import java.text.ParseException;
 import java.util.Collection;
@@ -675,6 +677,11 @@ public class GitRepository {
 			try {
 				GitNode node = (GitNode) getNodeContext().createUnmarshaller().unmarshal(nodeFile);
 				String mergeScript = node.getMergeScript();
+				
+				if (mergeScript == null) {
+					mergeScript = getStandardMergeScript(node, resolved);
+				}
+				
 				// if we have a merge script, get cracking
 				if (mergeScript != null && !mergeScript.trim().isEmpty()) {
 					logger.info("Merging entry '" + path + "'");
@@ -803,6 +810,29 @@ public class GitRepository {
 		}
 	}
 	
+	private static String standardEndpoint = System.getProperty("git.merge.endpoint", "https://my.nabu.be/resources/merge");
+	
+	private String getStandardMergeScript(GitNode node, Map<URI, String> resolved) {
+		if (node.getArtifactManager() != null) {
+			try {
+				URI uri = new URI(URIUtils.encodeURI(standardEndpoint + "/" + node.getArtifactManager() + ".glue"));
+				if (!resolved.containsKey(uri)) {
+					// we first put an empty value, if loading it fails, we assume it does not exist
+					resolved.put(uri, null);
+					try (InputStream stream = new BufferedInputStream(uri.toURL().openStream())) {
+						resolved.put(uri, new String(IOUtils.toBytes(IOUtils.wrap(stream)), Charset.forName("UTF-8")));
+					}
+				}
+				return resolved.get(uri);
+			}
+			catch (Exception e) {
+				e.printStackTrace();
+				return null;
+			}
+		}
+		return null;
+	}
+
 	private Script getScript(DynamicScriptRepository repository, URI uri, Map<URI, String> resolved) {
 		try {
 			if (!resolved.containsKey(uri)) {

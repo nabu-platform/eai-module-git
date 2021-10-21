@@ -12,7 +12,7 @@ public class GitNode {
 	private Date lastModified, created, deprecated;
 	private String environmentId;
 	private boolean hidden;
-	private String name, description, comment, summary;
+	private String name, description, comment, summary, artifactManager;
 	private List<String> tags;
 	private String mergeScript;
 	@XmlAttribute
@@ -89,5 +89,12 @@ public class GitNode {
 	}
 	public void setMergeScript(String mergeScript) {
 		this.mergeScript = mergeScript;
+	}
+	@XmlAttribute
+	public String getArtifactManager() {
+		return artifactManager;
+	}
+	public void setArtifactManager(String artifactManager) {
+		this.artifactManager = artifactManager;
 	}
 }
