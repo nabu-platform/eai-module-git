@@ -4,7 +4,6 @@ import be.nabu.eai.developer.api.EntryContextMenuProvider;
 import be.nabu.eai.repository.EAIRepositoryUtils;
 import be.nabu.eai.repository.api.Entry;
 import be.nabu.eai.repository.api.ResourceEntry;
-import be.nabu.libs.resources.api.ResourceContainer;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
 

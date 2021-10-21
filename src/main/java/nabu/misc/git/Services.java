@@ -1,9 +1,16 @@
 package nabu.misc.git;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
+import java.nio.charset.Charset;
 import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.List;
@@ -40,6 +47,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import be.nabu.eai.module.deployment.action.DeploymentAction;
+import be.nabu.eai.module.git.GitInformation;
+import be.nabu.eai.module.git.GitInformations;
 import be.nabu.eai.module.git.GitRelease;
 import be.nabu.eai.module.git.GitRepository;
 import be.nabu.eai.module.git.merge.MergeResult;
@@ -48,10 +57,18 @@ import be.nabu.eai.repository.EAIResourceRepository;
 import be.nabu.eai.repository.api.Entry;
 import be.nabu.eai.repository.api.ResourceEntry;
 import be.nabu.libs.authentication.api.Token;
+import be.nabu.libs.authentication.api.principals.BasicPrincipal;
+import be.nabu.libs.authentication.impl.BasicPrincipalImpl;
 import be.nabu.libs.resources.api.ResourceContainer;
 import be.nabu.libs.resources.file.FileDirectory;
 import be.nabu.libs.services.ServiceRuntime;
 import be.nabu.libs.services.api.ServiceException;
+import be.nabu.libs.types.TypeUtils;
+import be.nabu.libs.types.api.ComplexType;
+import be.nabu.libs.types.binding.api.Window;
+import be.nabu.libs.types.binding.xml.XMLBinding;
+import be.nabu.libs.types.java.BeanInstance;
+import be.nabu.libs.types.java.BeanResolver;
 import nabu.misc.git.types.GitBuild;
 
 // if we are releasing on the same server, we clone the directory of the project itself
@@ -65,6 +82,8 @@ import nabu.misc.git.types.GitBuild;
  * 
  * Additionally, we can't switch branches too often, cause this has to happen in the actual directory. For example we have to checkout the master to merge the develop branch
  * However, during that time when the server is looking at the master branch without having merged the development branch, weird errors might exist (files not found etc)
+ * 
+ * Should probably save the credentials in an encrypted settings file...
  * 
  * @author alex
  *
@@ -83,11 +102,11 @@ public class Services {
 	// we commit on the current branch (whichever that is) and push it to the origin (if any)
 	// this could be the master branch
 	// any deployment actions that reside within the id are run before committing
-	public void commit(@NotNull @WebParam(name = "id") String id, @WebParam(name = "message") String message, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws IllegalStateException, GitAPIException, FileNotFoundException, IOException, ServiceException, InterruptedException, ExecutionException {
+	public void commit(@NotNull @WebParam(name = "id") String id, @WebParam(name = "message") String message, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws IllegalStateException, GitAPIException, FileNotFoundException, IOException, ServiceException, InterruptedException, ExecutionException, ParseException {
 		commitInternal(id, message, true, username, password);
 	}
 
-	private Git commitInternal(String id, String message, boolean push, String username, String password) throws GitAPIException, IOException, FileNotFoundException, NoFilepatternException, AbortedByHookException, ConcurrentRefUpdateException, NoHeadException, NoMessageException, ServiceUnavailableException, UnmergedPathsException, WrongRepositoryStateException, RefAlreadyExistsException, RefNotFoundException, InvalidRefNameException, CheckoutConflictException, ServiceException, InterruptedException, ExecutionException, InvalidRemoteException, TransportException {
+	private Git commitInternal(String id, String message, boolean push, String username, String password) throws GitAPIException, IOException, FileNotFoundException, NoFilepatternException, AbortedByHookException, ConcurrentRefUpdateException, NoHeadException, NoMessageException, ServiceUnavailableException, UnmergedPathsException, WrongRepositoryStateException, RefAlreadyExistsException, RefNotFoundException, InvalidRefNameException, CheckoutConflictException, ServiceException, InterruptedException, ExecutionException, InvalidRemoteException, TransportException, ParseException {
 		Token token = ServiceRuntime.getRuntime().getExecutionContext().getSecurityContext().getToken();
 		
 		EAIResourceRepository repository = EAIResourceRepository.getInstance();
@@ -110,6 +129,10 @@ public class Services {
 		if (!(project instanceof ResourceEntry)) {
 			throw new IllegalArgumentException("Can not commit '" + id + "', the project is not resource-based");
 		}
+		
+		// some are resolved twice, but in the parent commit() service we don't know the project yet
+		BasicPrincipal credentials = getCredentials(project.getId(), username, password);
+		
 		container = ((ResourceEntry) project).getContainer();
 		if (!(container instanceof FileDirectory)) {
 			throw new IllegalArgumentException("Can not commit '" + id + "', the project is not file-based");
@@ -168,7 +191,7 @@ public class Services {
 			List<RemoteConfig> call = git.remoteList().call();
 			for (RemoteConfig config : call) {
 				if (remote.equals(config.getName())) {
-					authenticate(git.push(), username, password).setRemote(remote).call();
+					authenticate(git.push(), credentials.getName(), credentials.getPassword()).setRemote(remote).call();
 				}
 			}
 		}
@@ -189,15 +212,18 @@ public class Services {
 	// then merge the dev branch into the master
 	// then push the master to the origin (if available)
 	// this can start a remote build
-	public void release(@WebParam(name = "id") String id, @WebParam(name = "message") String message, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws IllegalStateException, FileNotFoundException, GitAPIException, IOException, ServiceException, InterruptedException, ExecutionException {
+	public void release(@WebParam(name = "id") String id, @WebParam(name = "message") String message, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws IllegalStateException, FileNotFoundException, GitAPIException, IOException, ServiceException, InterruptedException, ExecutionException, ParseException {
 		Token token = ServiceRuntime.getRuntime().getExecutionContext().getSecurityContext().getToken();
+		
 		
 		Entry entry = EAIResourceRepository.getInstance().getEntry(id);
 		if (!EAIRepositoryUtils.isProject(entry)) {
 			throw new IllegalArgumentException("Not a valid project id: " + id);
 		}
+		BasicPrincipal credentials = getCredentials(id, username, password);
+		
 		// first we run a commit cycle, we don't push yet, we first want to tag
-		Git git = commitInternal(id, "Commit for release", false, username, password);
+		Git git = commitInternal(id, "Commit for release", false, credentials.getName(), credentials.getPassword());
 		
 		// then we tag it
 		// first we check what the highest version was that we tagged before
@@ -224,7 +250,7 @@ public class Services {
 		for (RemoteConfig config : call) {
 			if (remote.equals(config.getName())) {
 				// we also push ze tags!
-				authenticate(git.push(), username, password).setPushTags().setRemote(remote).call();
+				authenticate(git.push(), credentials.getName(), credentials.getPassword()).setPushTags().setRemote(remote).call();
 			}
 		}
 	}
@@ -233,8 +259,18 @@ public class Services {
 	public GitBuild buildInformation(@NotNull @WebParam(name = "name") String name) {
 		GitRepository repository = getRepository(name);
 		GitBuild build = new GitBuild();
+		build.setName(name);
 		build.setReleases(new ArrayList<GitRelease>(repository.getVersions()));
 		return build;
+	}
+	
+	public List<GitBuild> buildInformations() {
+		List<GitBuild> builds = new ArrayList<GitBuild>();
+		File buildsFolder = getBuildsFolder();
+		if (buildsFolder.exists()) {
+			
+		}
+		return builds;
 	}
 	
 	@WebResult(name = "result")
@@ -260,6 +296,53 @@ public class Services {
 		return repository;
 	}
 	
+	private GitInformations getBuildFile() throws FileNotFoundException, IOException, ParseException {
+		File buildsFolder = getBuildsFolder();
+		if (!buildsFolder.exists()) {
+			buildsFolder.mkdirs();
+		}
+		GitInformations informations = null;
+		File file = new File(buildsFolder, "builds.xml");
+		if (!file.exists()) {
+			informations = new GitInformations();
+		}
+		else {
+			XMLBinding binding = new XMLBinding((ComplexType) BeanResolver.getInstance().resolve(GitInformations.class), Charset.forName("UTF-8"));
+			try (InputStream input = new BufferedInputStream(new FileInputStream(file))) {
+				informations = TypeUtils.getAsBean(binding.unmarshal(input, new Window[0]), GitInformations.class);
+			}
+		}
+		return informations;
+	}
+	private void saveBuildFile(GitInformations build) throws IOException {
+		File buildsFolder = getBuildsFolder();
+		File file = new File(buildsFolder, "builds.xml");
+		try (OutputStream output = new BufferedOutputStream(new FileOutputStream(file))) {
+			XMLBinding binding = new XMLBinding((ComplexType) BeanResolver.getInstance().resolve(GitInformations.class), Charset.forName("UTF-8"));
+			binding.setPrettyPrint(true);
+			binding.marshal(output, new BeanInstance<GitInformations>(build));
+		}
+	}
+	
+	public void authenticate(@NotNull @WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws FileNotFoundException, IOException, ParseException {
+		GitInformations buildFile = getBuildFile();
+		GitInformation information = null;
+		for (GitInformation possible : buildFile.getRepositories()) {
+			if (possible.getName().equals(name)) {
+				information = possible;
+				break;
+			}
+		}
+		if (information == null) {
+			information = new GitInformation();
+			information.setName(name);
+			buildFile.getRepositories().add(information);
+		}
+		information.setUsername(username);
+		information.setPassword(password);
+		saveBuildFile(buildFile);
+	}
+	
 	public void addEnvironment(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "environment") String environment, @WebParam(name = "copyEnvironment") String copyFromOther) {
 		GitRepository repository = getRepository(name);
 		repository.addEnvironment(environment, copyFromOther);
@@ -276,7 +359,8 @@ public class Services {
 	// if it exists, it will work from there
 	// if it doesn't exist yet, it will check the repo for a project by that name and start from there.
 	// otherwise, it will throw an exception
-	public void build(@WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws InvalidRemoteException, TransportException, GitAPIException {
+	public void build(@WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws InvalidRemoteException, TransportException, GitAPIException, FileNotFoundException, IOException, ParseException {
+		BasicPrincipal credentials = getCredentials(name, username, password);
 		name = name.replaceAll("[^\\w]+", "_");
 		File builds = getBuildsFolder();
 		File file = new File(builds, name);
@@ -287,7 +371,7 @@ public class Services {
 				ResourceContainer<?> container = ((ResourceEntry) entry).getContainer();
 				if (container instanceof FileDirectory) {
 					File project = ((FileDirectory) container).getFile();
-					clone(name, project.toURI(), username, password);
+					clone(name, project.toURI(), credentials.getName(), credentials.getPassword());
 				}
 			}
 		}
@@ -296,10 +380,31 @@ public class Services {
 			throw new IllegalArgumentException("There is no build with the name: " + name);
 		}
 		GitRepository repository = new GitRepository(file, name);
+		repository.setUsername(credentials.getName());
+		repository.setPassword(credentials.getPassword());
 		// we'll first check for new version tags
 		repository.checkForVersionUpdates();
 		// then we'll check for secondary updates
 		repository.checkForSecondaryUpdates();
+	}
+	
+	private BasicPrincipal getCredentials(String name, String username, String password) throws FileNotFoundException, IOException, ParseException {
+		// if you send in a username, we use that, we don't store it
+		if (username != null) {
+			return new BasicPrincipalImpl(username, password);
+		}
+		GitInformations buildFile = getBuildFile();
+		for (GitInformation repository : buildFile.getRepositories()) {
+			if (repository.getName().equals(name)) {
+				if (repository.getUsername() != null) {
+					return new BasicPrincipalImpl(repository.getUsername(), repository.getPassword());
+				}
+				else {
+					return null;
+				}
+			}
+		}
+		return null;
 	}
 	
 	public void clone(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "endpoint") URI uri, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws InvalidRemoteException, TransportException, GitAPIException {
