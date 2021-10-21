@@ -264,15 +264,33 @@ public class Services {
 		return build;
 	}
 	
-	public List<String> buildNames() {
-		List<String> builds = new ArrayList<String>();
+	@WebResult(name = "builds")
+	public List<GitInformation> builds() throws FileNotFoundException, IOException, ParseException {
+		GitInformations buildFile = getBuildFile();
+		List<String> names = new ArrayList<String>();
 		File buildsFolder = getBuildsFolder();
 		if (buildsFolder.exists()) {
 			for (File child : buildsFolder.listFiles()) {
 				if (child.isDirectory()) {
-					builds.add(child.getName());
+					names.add(child.getName());
 				}
 			}
+		}
+		List<GitInformation> builds = new ArrayList<GitInformation>();
+		for (GitInformation single : buildFile.getRepositories()) {
+			if (names.contains(single.getName())) {
+				builds.add(single);
+				names.remove(single.getName());
+			}
+		}
+		if (!names.isEmpty()) {
+			for (String missing : names) {
+				GitInformation information = new GitInformation();
+				information.setName(missing);
+				buildFile.getRepositories().add(information);
+				builds.add(information);
+			}
+			saveBuildFile(buildFile);
 		}
 		return builds;
 	}
@@ -328,7 +346,7 @@ public class Services {
 		}
 	}
 	
-	public void authenticate(@NotNull @WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws FileNotFoundException, IOException, ParseException {
+	public void configure(@NotNull @WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password, @WebParam(name = "description") String description) throws FileNotFoundException, IOException, ParseException {
 		GitInformations buildFile = getBuildFile();
 		GitInformation information = null;
 		for (GitInformation possible : buildFile.getRepositories()) {
@@ -344,6 +362,7 @@ public class Services {
 		}
 		information.setUsername(username);
 		information.setPassword(password);
+		information.setDescription(description);
 		saveBuildFile(buildFile);
 	}
 	
