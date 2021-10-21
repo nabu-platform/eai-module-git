@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.SortedSet;
 import java.util.TreeSet;
+import java.util.function.Predicate;
 import java.util.zip.ZipOutputStream;
 
 import javax.xml.bind.JAXBContext;
@@ -69,6 +70,7 @@ import be.nabu.glue.services.ServiceMethodProvider;
 import be.nabu.glue.utils.ScriptRuntime;
 import be.nabu.libs.resources.ResourceUtils;
 import be.nabu.libs.resources.URIUtils;
+import be.nabu.libs.resources.api.Resource;
 import be.nabu.libs.resources.file.FileDirectory;
 import be.nabu.libs.types.TypeUtils;
 import be.nabu.libs.types.api.ComplexType;
@@ -618,7 +620,15 @@ public class GitRepository {
 				git.checkout().setName(branch).call();
 				ByteBuffer newByteBuffer = IOUtils.newByteBuffer();
 				try (ZipOutputStream zipOutputStream = new ZipOutputStream(new BufferedOutputStream(IOUtils.toOutputStream(newByteBuffer)))) {
-					ResourceUtils.zip(new FileDirectory(null, folder, false), zipOutputStream, true);
+					ResourceUtils.zip(new FileDirectory(null, folder, false), zipOutputStream, true, new Predicate<Resource>() {
+						@Override
+						public boolean test(Resource t) {
+							if (t.getName().equals("merge-result.xml")) {
+								return false;
+							}
+							return true;
+						}
+					});
 				}
 				return IOUtils.toBytes(newByteBuffer);
 			}
