@@ -1,27 +1,21 @@
 package nabu.misc.git;
 
-import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.URI;
-import java.nio.charset.Charset;
 import java.text.ParseException;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
-import java.util.TreeSet;
 import java.util.concurrent.ExecutionException;
 
 import javax.jws.WebParam;
+import javax.jws.WebResult;
 import javax.jws.WebService;
 import javax.validation.constraints.NotNull;
 
 import org.eclipse.jgit.api.AddCommand;
 import org.eclipse.jgit.api.Git;
-import org.eclipse.jgit.api.Status;
 import org.eclipse.jgit.api.TransportCommand;
 import org.eclipse.jgit.api.errors.AbortedByHookException;
 import org.eclipse.jgit.api.errors.CheckoutConflictException;
@@ -40,7 +34,6 @@ import org.eclipse.jgit.api.errors.UnmergedPathsException;
 import org.eclipse.jgit.api.errors.WrongRepositoryStateException;
 import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.lib.Ref;
-import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.transport.RemoteConfig;
 import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
 import org.slf4j.Logger;
@@ -54,17 +47,11 @@ import be.nabu.eai.repository.EAIRepositoryUtils;
 import be.nabu.eai.repository.EAIResourceRepository;
 import be.nabu.eai.repository.api.Entry;
 import be.nabu.eai.repository.api.ResourceEntry;
-import be.nabu.eai.repository.resources.RepositoryEntry;
 import be.nabu.libs.authentication.api.Token;
 import be.nabu.libs.resources.api.ResourceContainer;
 import be.nabu.libs.resources.file.FileDirectory;
 import be.nabu.libs.services.ServiceRuntime;
 import be.nabu.libs.services.api.ServiceException;
-import be.nabu.libs.types.TypeUtils;
-import be.nabu.libs.types.api.ComplexType;
-import be.nabu.libs.types.binding.api.Window;
-import be.nabu.libs.types.binding.xml.XMLBinding;
-import be.nabu.libs.types.java.BeanResolver;
 import nabu.misc.git.types.GitBuild;
 
 // if we are releasing on the same server, we clone the directory of the project itself
@@ -90,38 +77,6 @@ public class Services {
 	private static String remote = System.getProperty("git.remote", "origin");
 
 	private Logger logger = LoggerFactory.getLogger(getClass());
-	
-	// you can standardize a particular project
-	// or you can standardize the whole server (all projects)
-	public void standardize(String projectId) {
-		EAIResourceRepository repository = EAIResourceRepository.getInstance();
-		RepositoryEntry root = repository.getRoot();
-		for (Entry child : root) {
-			try {
-				// it has to be resource-backed
-				if (child instanceof ResourceEntry && EAIRepositoryUtils.isProject(child)) {
-					// and more specifically file system
-					ResourceContainer<?> container = ((ResourceEntry) child).getContainer();
-					if (container instanceof FileDirectory) {
-						File file = ((FileDirectory) container).getFile();
-						// if there is no git folder yet, initiate one
-						if (!new File(file, ".git").exists()) {
-							logger.info("Found project without git repository, creating repository for: " + file.getName());
-							Git.init().setDirectory(file).call();
-						}
-						Git git = Git.open(file);
-						// if nothing has been committed yet, we add a marker file and commit only that to make sure the master branch exists
-						if (!git.log().call().iterator().hasNext()) {
-							new FileOutputStream(new File(file, ".git-marker")).close();
-						}
-					}
-				}
-			}
-			catch (Exception e) {
-				throw new RuntimeException(e);
-			}
-		}
-	}
 	
 	// commit an entire project or a particular folder
 	// we use the metadata of the calling user
@@ -234,15 +189,15 @@ public class Services {
 	// then merge the dev branch into the master
 	// then push the master to the origin (if available)
 	// this can start a remote build
-	public void release(@WebParam(name = "projectId") String projectId, @WebParam(name = "message") String message, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws IllegalStateException, FileNotFoundException, GitAPIException, IOException, ServiceException, InterruptedException, ExecutionException {
+	public void release(@WebParam(name = "id") String id, @WebParam(name = "message") String message, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws IllegalStateException, FileNotFoundException, GitAPIException, IOException, ServiceException, InterruptedException, ExecutionException {
 		Token token = ServiceRuntime.getRuntime().getExecutionContext().getSecurityContext().getToken();
 		
-		Entry entry = EAIResourceRepository.getInstance().getEntry(projectId);
+		Entry entry = EAIResourceRepository.getInstance().getEntry(id);
 		if (!EAIRepositoryUtils.isProject(entry)) {
-			throw new IllegalArgumentException("Not a valid project id: " + projectId);
+			throw new IllegalArgumentException("Not a valid project id: " + id);
 		}
 		// first we run a commit cycle, we don't push yet, we first want to tag
-		Git git = commitInternal(projectId, "Commit for release", false, username, password);
+		Git git = commitInternal(id, "Commit for release", false, username, password);
 		
 		// then we tag it
 		// first we check what the highest version was that we tagged before
@@ -274,6 +229,7 @@ public class Services {
 		}
 	}
 	
+	@WebResult(name = "build")
 	public GitBuild buildInformation(@NotNull @WebParam(name = "name") String name) {
 		GitRepository repository = getRepository(name);
 		GitBuild build = new GitBuild();
@@ -281,6 +237,7 @@ public class Services {
 		return build;
 	}
 	
+	@WebResult(name = "result")
 	public MergeResult getMergeResult(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch) throws IOException, ParseException {
 		GitRepository repository = getRepository(name);
 		return repository.getMergeResult(branch);
@@ -306,6 +263,12 @@ public class Services {
 	public void addEnvironment(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "environment") String environment, @WebParam(name = "copyEnvironment") String copyFromOther) {
 		GitRepository repository = getRepository(name);
 		repository.addEnvironment(environment, copyFromOther);
+	}
+	
+	@WebResult(name = "zip")
+	public byte [] zip(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch) {
+		GitRepository repository = getRepository(name);
+		return repository.getAsZip(branch);
 	}
 	
 	// we can "build" a project

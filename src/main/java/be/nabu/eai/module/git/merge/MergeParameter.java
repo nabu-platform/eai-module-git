@@ -1,5 +1,7 @@
 package be.nabu.eai.module.git.merge;
 
+import java.util.List;
+
 public class MergeParameter {
 	// the category of the parameter, this allows the scripts to categorize its own parameters without resorting to creative naming
 	// the name of the parameter
@@ -9,6 +11,8 @@ public class MergeParameter {
 	// and the previous value (in the previous branch of this environment, if any)
 	// and the raw value from the master (probably the dev value)
 	private String category, name, title, type, current, previous, raw;
+	// the enumeration of possible values
+	private List<String> enumeration;
 	// a description for the user
 	private String description;
 	// whether or not the parameter is optional and/or (potentially) encrypted
@@ -73,5 +77,11 @@ public class MergeParameter {
 	}
 	public void setEncrypted(boolean encrypted) {
 		this.encrypted = encrypted;
+	}
+	public List<String> getEnumeration() {
+		return enumeration;
+	}
+	public void setEnumeration(List<String> enumeration) {
+		this.enumeration = enumeration;
 	}
 }

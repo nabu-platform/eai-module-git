@@ -1,15 +1,31 @@
 package be.nabu.eai.module.git;
 
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
+import javax.xml.parsers.ParserConfigurationException;
+
 import org.eclipse.jgit.revwalk.RevCommit;
+import org.xml.sax.SAXException;
 
 import be.nabu.eai.module.git.merge.MergeEntry;
 import be.nabu.eai.module.git.merge.MergeResult;
 import be.nabu.glue.annotations.GlueParam;
+import be.nabu.glue.xml.XMLMethods;
 import be.nabu.eai.module.git.merge.MergeParameter;
 import be.nabu.libs.evaluator.annotations.MethodProviderClass;
+import be.nabu.libs.types.BaseTypeInstance;
+import be.nabu.libs.types.CollectionHandlerFactory;
+import be.nabu.libs.types.TypeConverterFactory;
+import be.nabu.libs.types.TypeUtils;
+import be.nabu.libs.types.api.CollectionHandlerProvider;
+import be.nabu.libs.types.api.ComplexContent;
+import be.nabu.libs.types.api.Element;
+import be.nabu.libs.types.api.KeyValuePair;
+import be.nabu.libs.types.java.BeanInstance;
+import be.nabu.libs.types.utils.KeyValuePairImpl;
 
 //TODO: document validation: given an XML file and a structure, validate it (to detect configuration problems)
 // in most cases however, the validation rules will be hidden in java code, so needs to be replicated to glue
@@ -58,7 +74,9 @@ public class GitMethods {
 			@GlueParam(name = "type") String type,
 			@GlueParam(name = "encrypted") Boolean encrypted,
 			@GlueParam(name = "optional") Boolean optional,
-			@GlueParam(name = "raw") String raw) {
+			@GlueParam(name = "raw") String raw,
+			// possible values
+			@GlueParam(name = "values") String...values) {
 		if (name == null || name.trim().isEmpty()) {
 			throw new IllegalArgumentException("Name is mandatory");
 		}
@@ -83,6 +101,11 @@ public class GitMethods {
 				result.setEncrypted(previousParameter.isEncrypted());
 				result.setOptional(previousParameter.isOptional());
 				result.setType(previousParameter.getType());
+				result.setCurrent(previousParameter.getCurrent());
+			}
+			else {
+				// inherit from dev
+				result.setCurrent(raw);
 			}
 		}
 		if (description != null) {
@@ -103,8 +126,12 @@ public class GitMethods {
 		if (encrypted != null) {
 			result.setEncrypted(encrypted);
 		}
-		if (raw != null) {
+		// on the second pass, you are no longer seeing the actual raw value
+		if (raw != null && result.getRaw() == null) {
 			result.setRaw(raw);
+		}
+		if (values != null && values.length > 0) {
+			result.setEnumeration(Arrays.asList(values));
 		}
 		return result;
 	}
@@ -150,5 +177,54 @@ public class GitMethods {
 	}
 	protected void setCurrentEntryId(String currentEntryId) {
 		this.currentEntryId = currentEntryId;
+	}
+	
+	public List<KeyValuePair> toKeyValue(Object object) throws IOException, SAXException, ParserConfigurationException {
+		List<KeyValuePair> properties = new ArrayList<KeyValuePair>();
+		if (object != null) {
+			ComplexContent content = (ComplexContent) XMLMethods.objectify(object);
+			toProperties(content, properties, null, "/");
+		}
+		return properties;
+	}
+	
+	@SuppressWarnings({ "rawtypes", "unchecked" })
+	private void toProperties(ComplexContent content, List<KeyValuePair> properties, String path, String separator) {
+		for (Element<?> child : TypeUtils.getAllChildren(content.getType())) {
+			String childPath = path == null ? child.getName() : path + separator + child.getName();
+			java.lang.Object value = content.get(child.getName());
+			if (value != null) {
+				CollectionHandlerProvider collectionHandler = CollectionHandlerFactory.getInstance().getHandler().getHandler(value.getClass());
+				if (collectionHandler != null) {
+					for (java.lang.Object index : collectionHandler.getIndexes(value)) {
+						java.lang.Object singleValue = collectionHandler.get(value, index);
+						if (singleValue != null) {
+							String singlePath = childPath;
+							if (index instanceof Number) {
+								singlePath += "[" + index + "]";
+							}
+							else {
+								singlePath += "[\"" + index + "\"]";
+							}
+							singleToProperties(child, singleValue, properties, singlePath, separator);
+						}
+					}
+				}
+				else {
+					singleToProperties(child, value, properties, childPath, separator);
+				}
+			}
+		}
+	}
+	
+	private void singleToProperties(Element<?> child, java.lang.Object value, List<KeyValuePair> properties, String childPath, String separator) {
+		if (value instanceof ComplexContent) {
+			toProperties((ComplexContent) value, properties, childPath, separator);
+		}
+		else {
+			properties.add(new KeyValuePairImpl(childPath, value instanceof String 
+				? (String) value
+				: (java.lang.String) TypeConverterFactory.getInstance().getConverter().convert(value, child, new BaseTypeInstance(new be.nabu.libs.types.simple.String()))));
+		}
 	}
 }

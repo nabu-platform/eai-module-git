@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.SortedSet;
 import java.util.TreeSet;
+import java.util.zip.ZipOutputStream;
 
 import javax.xml.bind.JAXBContext;
 
@@ -66,7 +67,9 @@ import be.nabu.glue.core.repositories.DynamicScriptRepository;
 import be.nabu.glue.impl.SimpleExecutionEnvironment;
 import be.nabu.glue.services.ServiceMethodProvider;
 import be.nabu.glue.utils.ScriptRuntime;
+import be.nabu.libs.resources.ResourceUtils;
 import be.nabu.libs.resources.URIUtils;
+import be.nabu.libs.resources.file.FileDirectory;
 import be.nabu.libs.types.TypeUtils;
 import be.nabu.libs.types.api.ComplexType;
 import be.nabu.libs.types.binding.api.Window;
@@ -74,6 +77,7 @@ import be.nabu.libs.types.binding.xml.XMLBinding;
 import be.nabu.libs.types.java.BeanInstance;
 import be.nabu.libs.types.java.BeanResolver;
 import be.nabu.utils.io.IOUtils;
+import be.nabu.utils.io.api.ByteBuffer;
 import be.nabu.utils.security.EncryptionXmlAdapter;
 
 /**
@@ -511,6 +515,10 @@ public class GitRepository {
 							parameter.setPrevious(encryptionXmlAdapter.unmarshal(parameter.getPrevious()));
 						}
 					}
+					// replace with null, don't trim in case you want explicit whitespace
+					if (parameter.getCurrent() != null && parameter.getCurrent().isEmpty()) {
+						parameter.setCurrent(null);
+					}
 				}
 			}
 		}
@@ -532,6 +540,10 @@ public class GitRepository {
 						if (parameter.getPrevious() != null) {
 							parameter.setPrevious(encryptionXmlAdapter.marshal(parameter.getPrevious()));
 						}
+					}
+					// replace with null, don't trim in case you want explicit whitespace
+					if (parameter.getCurrent() != null && parameter.getCurrent().isEmpty()) {
+						parameter.setCurrent(null);
 					}
 				}
 			}
@@ -556,6 +568,59 @@ public class GitRepository {
 						binding.marshal(output, new BeanInstance<MergeResult>(encrypt(result)));
 					}
 				}
+				// we need to immediately merge this result, otherwise we can't checkout other branches
+				GitEnvironment environment = getEnvironment(getVersions(), branch);
+				merge(environment);
+			}
+			finally {
+				git.checkout().setName(this.branch).call();
+			}
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+	
+	synchronized private void merge(GitEnvironment current) {
+		GitEnvironment previous = null;
+		if (current.getPatch().getPatch() == 0) {
+			GitRelease release = current.getPatch().getRelease();
+			GitRelease lower = getVersions().lower(release);
+			if (lower != null) {
+				GitPatch lastPatch = lower.getLastPatch();
+				if (lastPatch != null) {
+					for (GitEnvironment environment : lastPatch.getEnvironments()) {
+						if (environment.getName().equals(current.getName())) {
+							previous = environment;
+							break;
+						}
+					}
+				}
+			}
+		}
+		else {
+			GitPatch lower = current.getPatch().getRelease().getPatchVersions().lower(current.getPatch());
+			if (lower != null) {
+				for (GitEnvironment environment : lower.getEnvironments()) {
+					if (environment.getName().equals(current.getName())) {
+						previous = environment;
+						break;
+					}
+				}
+			}
+		}
+		merge(current, previous);
+	}
+	
+	synchronized public byte[] getAsZip(String branch) {
+		try {
+			try {
+				git.checkout().setName(branch).call();
+				ByteBuffer newByteBuffer = IOUtils.newByteBuffer();
+				try (ZipOutputStream zipOutputStream = new ZipOutputStream(new BufferedOutputStream(IOUtils.toOutputStream(newByteBuffer)))) {
+					ResourceUtils.zip(new FileDirectory(null, folder, false), zipOutputStream, true);
+				}
+				return IOUtils.toBytes(newByteBuffer);
 			}
 			finally {
 				git.checkout().setName(this.branch).call();
