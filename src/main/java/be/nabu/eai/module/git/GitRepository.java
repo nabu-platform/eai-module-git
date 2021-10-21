@@ -38,6 +38,7 @@ import org.eclipse.jgit.lib.ObjectReader;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
+import org.eclipse.jgit.transport.TagOpt;
 import org.eclipse.jgit.treewalk.TreeWalk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -158,7 +159,7 @@ public class GitRepository {
 //			System.out.println("commit on branch: " + commit.getId().getName() + " / " + commit.getAuthorIdent().getWhen());
 //		}
 //		gitRepository.addEnvironment("dev", null);
-		gitRepository.checkForPrimaryUpdates();
+		gitRepository.checkForAnyPrimaryUpdates();
 		gitRepository.checkForSecondaryUpdates();
 	}
 	
@@ -287,8 +288,65 @@ public class GitRepository {
 		}
 	}
 	
-	// a primary update is on the "master" branch
-	synchronized public void checkForPrimaryUpdates() {
+	// here we check specifically for version tags in the form of "v1", "v2" etc
+	// there is no concept of a minor version at this point
+	// the upside is, we only build releases on specific versions, which makes it easy to link the release back to the manual action of "releasing" it
+	// the downside is, you need to explicitly tag to kickstart the process
+	synchronized public void checkForVersionUpdates() {
+		try {
+			// switch to the correct branch
+			git.checkout().setName(branch).call();
+			// if you have not configured a remote, we can't pull
+			// you might be committing straight to the branch
+			if (remote != null) {
+				// pull the latest data, including the tags (we are looking for version tags)
+				logger.info("Pulling last data for branch '" + branch + "' from '" + remote + "'");
+				PullResult call = git.pull().setTagOpt(TagOpt.FETCH_TAGS).setRemote(remote).call();
+				if (!call.getMergeResult().getConflicts().isEmpty()) {
+					throw new RuntimeException("Merge conflicts detected: " + call);
+				}
+			}
+			// get the last version
+			GitRelease lastVersion = getLastVersion();
+			// get the tags
+			for (Ref tag : getTags()) {
+				String name = tag.getName().replaceAll("^.*/([^/]+$)", "$1");
+				// if you push multiple versions and one fails, we don't want to block the other ones
+				// we don't particularly care which order the versions are processed in, we use the correct starting point for the branch
+				// because they are created at the same time, they will all look at the latest data to merge, so it doesn't make a difference in which order
+				try {
+					if (name.matches("^v[0-9]+$")) {
+						int tagVersion = Integer.parseInt(name.substring(1));
+						RevCommit commit = getCommit(tag);
+						// if this version tag is more recent than the last version we have, we start a new branch
+						if (lastVersion == null || lastVersion.getDate().before(GitUtils.getCommitDate(commit))) {
+							GitRelease newVersion = new GitRelease(tagVersion);
+							String newBranchName = "r" + tagVersion;
+							logger.info("Found a new version on branch '" + branch + "', creating release '" + newBranchName + "'");
+							getVersions().add(newVersion);
+							// we create the new branch
+							git.branchCreate().setStartPoint(commit).setName(newBranchName).call();
+							newVersion.setCommit(commit);
+							createPatch(newVersion, 0);
+						}
+					}
+				}
+				catch (Exception e) {
+					logger.error("Could not create release branch for: " + name, e);
+				}
+			}
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+	
+	// a primary update is any commit on the "master" branch
+	// so basically, once you run this, it will check if there is a commit more recent than the last release and use that to build a new release
+	// this means we could be skipping hundreds of commits, depending on when it is pushed to the master and when this is run
+	// the potential downside is that it might become hard to validate exactly which commit is being used
+	// the upside is that you don't need to do anything special, just push to the master branch and you are set
+	synchronized public void checkForAnyPrimaryUpdates() {
 		try {
 			// switch to the correct branch
 			git.checkout().setName(branch).call();
@@ -313,7 +371,7 @@ public class GitRepository {
 				if (lastVersion == null || lastVersion.getDate().before(GitUtils.getCommitDate(lastCommitOn))) {
 					GitRelease newVersion = new GitRelease(lastVersion == null ? 1 : lastVersion.getVersion() + 1);
 					String newBranchName = "r" + newVersion.getVersion();
-					logger.info("Found a new commit on branch '" + branch + "', creating version '" + newBranchName + "'");
+					logger.info("Found a new commit on branch '" + branch + "', creating release '" + newBranchName + "'");
 					
 					getVersions().add(newVersion);
 					// we create the new branch

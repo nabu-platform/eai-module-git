@@ -31,6 +31,8 @@ import org.eclipse.jgit.api.errors.ServiceUnavailableException;
 import org.eclipse.jgit.api.errors.TransportException;
 import org.eclipse.jgit.api.errors.UnmergedPathsException;
 import org.eclipse.jgit.api.errors.WrongRepositoryStateException;
+import org.eclipse.jgit.lib.PersonIdent;
+import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.transport.RemoteConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -110,10 +112,10 @@ public class Services {
 	// this could be the master branch
 	// any deployment actions that reside within the id are run before committing
 	public void commit(@WebParam(name = "id") String id, @WebParam(name = "message") String message) throws IllegalStateException, GitAPIException, FileNotFoundException, IOException, ServiceException, InterruptedException, ExecutionException {
-		commitInternal(id, message);
+		commitInternal(id, message, true);
 	}
 
-	private Git commitInternal(String id, String message) throws GitAPIException, IOException, FileNotFoundException, NoFilepatternException, AbortedByHookException, ConcurrentRefUpdateException, NoHeadException, NoMessageException, ServiceUnavailableException, UnmergedPathsException, WrongRepositoryStateException, RefAlreadyExistsException, RefNotFoundException, InvalidRefNameException, CheckoutConflictException, ServiceException, InterruptedException, ExecutionException, InvalidRemoteException, TransportException {
+	private Git commitInternal(String id, String message, boolean push) throws GitAPIException, IOException, FileNotFoundException, NoFilepatternException, AbortedByHookException, ConcurrentRefUpdateException, NoHeadException, NoMessageException, ServiceUnavailableException, UnmergedPathsException, WrongRepositoryStateException, RefAlreadyExistsException, RefNotFoundException, InvalidRefNameException, CheckoutConflictException, ServiceException, InterruptedException, ExecutionException, InvalidRemoteException, TransportException {
 		Token token = ServiceRuntime.getRuntime().getExecutionContext().getSecurityContext().getToken();
 		
 		EAIResourceRepository repository = EAIResourceRepository.getInstance();
@@ -146,7 +148,7 @@ public class Services {
 			logger.info("Found project without git repository, creating repository for: " + file.getName());
 			Git.init().setDirectory(file).call();
 			
-			git = Git.open(file);
+			git = Git.open(new File(file, ".git"));
 			// we commit an empty marker file to make sure a master branch can exist
 			new FileOutputStream(new File(file, ".git-marker")).close();
 			// add the marker file for commit
@@ -159,7 +161,7 @@ public class Services {
 			git.checkout().setName("develop").call();
 		}
 		else {
-			git = Git.open(file);
+			git = Git.open(new File(file, ".git"));
 		}
 		// run deployment actions within the entry
 		for (DeploymentAction action : repository.getArtifacts(DeploymentAction.class)) {
@@ -183,10 +185,21 @@ public class Services {
 			// commit it
 			git.commit()
 				.setAll(true)
-				.setCommitter(token == null ? "anonymous" : token.getName(), token == null ? "$anonymous" : token.getName())
+				.setCommitter(new PersonIdent(token == null ? "anonymous" : token.getName(), token == null ? "$anonymous" : token.getName()))
 				.setMessage(message == null ? "No message" : message)
 				.call();
+			
+			if (push) {
+				// push it remotely if possible
+				List<RemoteConfig> call = git.remoteList().call();
+				for (RemoteConfig config : call) {
+					if (remote.equals(config.getName())) {
+						git.push().setRemote(remote).call();
+					}
+				}
+			}
 		}
+		
 		return git;
 	}
 	
@@ -196,19 +209,42 @@ public class Services {
 	// then merge the dev branch into the master
 	// then push the master to the origin (if available)
 	// this can start a remote build
-	public void release(@WebParam(name = "projectId") String projectId) throws IllegalStateException, FileNotFoundException, GitAPIException, IOException, ServiceException, InterruptedException, ExecutionException {
+	public void release(@WebParam(name = "projectId") String projectId, @WebParam(name = "message") String message) throws IllegalStateException, FileNotFoundException, GitAPIException, IOException, ServiceException, InterruptedException, ExecutionException {
+		Token token = ServiceRuntime.getRuntime().getExecutionContext().getSecurityContext().getToken();
+		
 		Entry entry = EAIResourceRepository.getInstance().getEntry(projectId);
 		if (!EAIRepositoryUtils.isProject(entry)) {
 			throw new IllegalArgumentException("Not a valid project id: " + projectId);
 		}
-		// first we run a commit cycle
-		Git git = commitInternal(projectId, "Release " + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date()));
+		// first we run a commit cycle, we don't push yet, we first want to tag
+		Git git = commitInternal(projectId, "Commit for release", false);
+		
+		// then we tag it
+		// first we check what the highest version was that we tagged before
+		List<Ref> tags = git.tagList().call();
+		int highestVersion = 0;
+		for (Ref tag : tags) {
+			String name = tag.getName().replaceAll("^.*/([^/]+$)", "$1");
+			if (name.matches("^v[0-9]+$")) {
+				int tagVersion = Integer.parseInt(name.substring(1));
+				if (tagVersion > highestVersion) {
+					highestVersion = tagVersion;
+				}
+			}
+		}
+		// create the tag
+		git.tag()
+			.setName("v" + (highestVersion + 1))
+			.setMessage(message)
+			.setTagger(new PersonIdent(token == null ? "anonymous" : token.getName(), token == null ? "$anonymous" : token.getName()))
+			.call();
 		
 		// push it remotely if possible
 		List<RemoteConfig> call = git.remoteList().call();
 		for (RemoteConfig config : call) {
 			if (remote.equals(config.getName())) {
-				git.push().setRemote(remote).call();
+				// we also push ze tags!
+				git.push().setPushTags().setRemote(remote).call();
 			}
 		}
 	}
