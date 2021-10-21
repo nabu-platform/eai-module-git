@@ -264,11 +264,15 @@ public class Services {
 		return build;
 	}
 	
-	public List<GitBuild> buildInformations() {
-		List<GitBuild> builds = new ArrayList<GitBuild>();
+	public List<String> buildNames() {
+		List<String> builds = new ArrayList<String>();
 		File buildsFolder = getBuildsFolder();
 		if (buildsFolder.exists()) {
-			
+			for (File child : buildsFolder.listFiles()) {
+				if (child.isDirectory()) {
+					builds.add(child.getName());
+				}
+			}
 		}
 		return builds;
 	}
