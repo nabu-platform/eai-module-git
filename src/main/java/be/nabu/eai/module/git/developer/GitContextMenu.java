@@ -17,8 +17,6 @@ public class GitContextMenu implements EntryContextMenuProvider {
 			
 			if (EAIRepositoryUtils.isProject(entry)) {
 				MenuItem release = new MenuItem("Release");
-				
-				MenuItem build = new MenuItem("Build");
 			}
 		}
 		

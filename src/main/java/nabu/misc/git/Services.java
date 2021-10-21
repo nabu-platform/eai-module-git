@@ -56,6 +56,7 @@ import be.nabu.eai.repository.EAIRepositoryUtils;
 import be.nabu.eai.repository.EAIResourceRepository;
 import be.nabu.eai.repository.api.Entry;
 import be.nabu.eai.repository.api.ResourceEntry;
+import be.nabu.eai.repository.resources.RepositoryEntry;
 import be.nabu.libs.authentication.api.Token;
 import be.nabu.libs.authentication.api.principals.BasicPrincipal;
 import be.nabu.libs.authentication.impl.BasicPrincipalImpl;
@@ -276,6 +277,38 @@ public class Services {
 				}
 			}
 		}
+		List<GitInformation> builds = new ArrayList<GitInformation>();
+		for (GitInformation single : buildFile.getRepositories()) {
+			if (names.contains(single.getName())) {
+				builds.add(single);
+				names.remove(single.getName());
+			}
+		}
+		if (!names.isEmpty()) {
+			for (String missing : names) {
+				GitInformation information = new GitInformation();
+				information.setName(missing);
+				buildFile.getRepositories().add(information);
+				builds.add(information);
+			}
+			saveBuildFile(buildFile);
+		}
+		return builds;
+	}
+	
+	@WebResult(name = "projects")
+	public List<GitInformation> projects() throws FileNotFoundException, IOException, ParseException {
+		RepositoryEntry root = EAIResourceRepository.getInstance().getRoot();
+		List<String> names = new ArrayList<String>();
+		for (Entry child : root) {
+			if (EAIRepositoryUtils.isProject(child) && child instanceof ResourceEntry) {
+				ResourceContainer<?> container = ((ResourceEntry) child).getContainer();
+				if (container instanceof FileDirectory) {
+					names.add(child.getName());
+				}
+			}
+		}
+		GitInformations buildFile = getBuildFile();
 		List<GitInformation> builds = new ArrayList<GitInformation>();
 		for (GitInformation single : buildFile.getRepositories()) {
 			if (names.contains(single.getName())) {
