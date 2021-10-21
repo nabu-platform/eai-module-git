@@ -160,7 +160,7 @@ import be.nabu.utils.security.EncryptionXmlAdapter;
 public class GitRepository {
 	private String branch = "master";
 	// the name of the remote, e.g. "origin"
-	private String remote;
+	private String remote = "origin";
 	private Git git;
 	private TreeSet<GitRelease> versions;
 	// how many versions we check
@@ -328,7 +328,7 @@ public class GitRepository {
 				// pull the latest data, including the tags (we are looking for version tags)
 				logger.info("Pulling last data for branch '" + branch + "' from '" + remote + "'");
 				PullResult call = authenticate(git.pull()).setTagOpt(TagOpt.FETCH_TAGS).setRemote(remote).call();
-				if (!call.getMergeResult().getConflicts().isEmpty()) {
+				if (call.getMergeResult().getConflicts() != null && !call.getMergeResult().getConflicts().isEmpty()) {
 					throw new RuntimeException("Merge conflicts detected: " + call);
 				}
 			}
@@ -383,7 +383,7 @@ public class GitRepository {
 				// pull the latest data
 				logger.info("Pulling last data for branch '" + branch + "' from '" + remote + "'");
 				PullResult call = authenticate(git.pull()).setRemote(remote).call();
-				if (!call.getMergeResult().getConflicts().isEmpty()) {
+				if (call.getMergeResult().getConflicts() != null && !call.getMergeResult().getConflicts().isEmpty()) {
 					throw new RuntimeException("Merge conflicts detected: " + call);
 				}
 			}

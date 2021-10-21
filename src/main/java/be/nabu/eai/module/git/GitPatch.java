@@ -10,6 +10,9 @@ public class GitPatch extends GitReference {
 	private List<GitEnvironment> environments;
 	private GitRelease release;
 	private String branch;
+	public GitPatch() {
+		// auto construct
+	}
 	public GitPatch(GitRelease release, int patch) {
 		this.release = release;
 		this.patch = patch;

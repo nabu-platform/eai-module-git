@@ -4,11 +4,16 @@ import java.util.Comparator;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
+import javax.xml.bind.annotation.XmlTransient;
+
 public class GitEnvironment extends GitReference {
 	private String name;
 	private SortedSet<GitReleaseCandidate> releaseCandidates;
 	private GitPatch patch;
 	private String branch;
+	public GitEnvironment() {
+		// auto construct
+	}
 	public GitEnvironment(GitPatch patch, String name) {
 		this.patch = patch;
 		this.name = name;
@@ -19,6 +24,7 @@ public class GitEnvironment extends GitReference {
 	public void setName(String name) {
 		this.name = name;
 	}
+	@XmlTransient
 	public GitReleaseCandidate getLastReleaseCandidate() {
 		SortedSet<GitReleaseCandidate> releaseCandidates = getReleaseCandidates();
 		return releaseCandidates.isEmpty() ? null : releaseCandidates.last();
@@ -53,6 +59,7 @@ public class GitEnvironment extends GitReference {
 		}
 		return builder.toString();
 	}
+	@XmlTransient
 	public GitPatch getPatch() {
 		return patch;
 	}

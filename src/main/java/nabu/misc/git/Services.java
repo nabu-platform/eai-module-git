@@ -166,16 +166,17 @@ public class Services {
 			Git.init().setDirectory(file).call();
 			
 			git = Git.open(new File(file, ".git"));
-			// we commit an empty marker file to make sure a master branch can exist
-			new FileOutputStream(new File(file, ".git-marker")).close();
-			// add the marker file for commit
-			git.add().addFilepattern(".git-marker").call();
-			// create the initial commit, this should create a master branch
-			git.commit().setMessage("Initial").call();
-			// branch this into a develop branch
-			git.branchCreate().setName("develop").call();
-			// and check it out
-			git.checkout().setName("develop").call();
+			// we've stepped away from the "mandatory" develop branch, leaving more flexibility
+//			// we commit an empty marker file to make sure a master branch can exist
+//			new FileOutputStream(new File(file, ".git-marker")).close();
+//			// add the marker file for commit
+//			git.add().addFilepattern(".git-marker").call();
+//			// create the initial commit, this should create a master branch
+//			git.commit().setMessage("Initial").call();
+//			// branch this into a develop branch
+//			git.branchCreate().setName("develop").call();
+//			// and check it out
+//			git.checkout().setName("develop").call();
 		}
 		else {
 			git = Git.open(new File(file, ".git"));
@@ -192,27 +193,27 @@ public class Services {
 			// it must reside in the project, so we substract the name of the project (and the .)
 			: entry.getId().substring(project.getId().length() + 1).replace(".", "/");
 
-		Status status = git.status().addPath(path).call();
-		// only commit if relevant
-		if (status != null && status.hasUncommittedChanges()) {
-			AddCommand add = git.add();
-			add.addFilepattern(path);
-			add.call();
-			
+		AddCommand add = git.add();
+		add.addFilepattern(path);
+		add.call();
+		
+		// does not seem to work...?
+//		Status status = git.status().addPath(path).call();
+//		// only commit if relevant
+//		if (status != null && status.hasUncommittedChanges()) {
 			// commit it
-			git.commit()
-				.setAll(true)
-				.setCommitter(new PersonIdent(token == null ? "anonymous" : token.getName(), token == null ? "$anonymous" : token.getName()))
-				.setMessage(message == null ? "No message" : message)
-				.call();
-			
-			if (push) {
-				// push it remotely if possible
-				List<RemoteConfig> call = git.remoteList().call();
-				for (RemoteConfig config : call) {
-					if (remote.equals(config.getName())) {
-						authenticate(git.push(), username, password).setRemote(remote).call();
-					}
+		git.commit()
+			.setAll(true)
+			.setCommitter(new PersonIdent(token == null ? "anonymous" : token.getName(), token == null ? "$anonymous" : token.getName()))
+			.setMessage(message == null ? "No message" : message)
+			.call();
+		
+		if (push) {
+			// push it remotely if possible
+			List<RemoteConfig> call = git.remoteList().call();
+			for (RemoteConfig config : call) {
+				if (remote.equals(config.getName())) {
+					authenticate(git.push(), username, password).setRemote(remote).call();
 				}
 			}
 		}
@@ -274,32 +275,23 @@ public class Services {
 	}
 	
 	public GitBuild buildInformation(@NotNull @WebParam(name = "name") String name) {
-		name = name.replaceAll("[^\\w]+", "_");
-		File builds = getBuildsFolder();
-		File file = new File(builds, name);
-		File git = new File(file, ".git");
-		if (!git.exists()) {
-			throw new IllegalArgumentException("There is no build with the name: " + name);
-		}
-		GitRepository repository = new GitRepository(file, name);
+		GitRepository repository = getRepository(name);
 		GitBuild build = new GitBuild();
 		build.setReleases(new ArrayList<GitRelease>(repository.getVersions()));
 		return build;
 	}
 	
 	public MergeResult getMergeResult(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch) throws IOException, ParseException {
-		name = name.replaceAll("[^\\w]+", "_");
-		File builds = getBuildsFolder();
-		File file = new File(builds, name);
-		File git = new File(file, ".git");
-		if (!git.exists()) {
-			throw new IllegalArgumentException("There is no build with the name: " + name);
-		}
-		GitRepository repository = new GitRepository(file, name);
+		GitRepository repository = getRepository(name);
 		return repository.getMergeResult(branch);
 	}
 	
 	public void setMergeResult(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch, @WebParam(name = "result") MergeResult result) {
+		GitRepository repository = getRepository(name);
+		repository.setMergeResult(branch, result);
+	}
+
+	private GitRepository getRepository(String name) {
 		name = name.replaceAll("[^\\w]+", "_");
 		File builds = getBuildsFolder();
 		File file = new File(builds, name);
@@ -308,7 +300,12 @@ public class Services {
 			throw new IllegalArgumentException("There is no build with the name: " + name);
 		}
 		GitRepository repository = new GitRepository(file, name);
-		repository.setMergeResult(branch, result);
+		return repository;
+	}
+	
+	public void addEnvironment(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "environment") String environment, @WebParam(name = "copyEnvironment") String copyFromOther) {
+		GitRepository repository = getRepository(name);
+		repository.addEnvironment(environment, copyFromOther);
 	}
 	
 	// we can "build" a project

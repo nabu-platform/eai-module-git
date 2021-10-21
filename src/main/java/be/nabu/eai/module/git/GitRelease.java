@@ -4,10 +4,16 @@ import java.util.Comparator;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
+import javax.xml.bind.annotation.XmlTransient;
+
 public class GitRelease extends GitReference {
 	private int version;
 	private TreeSet<GitPatch> patchVersions;
 	private String branch;
+	
+	public GitRelease() {
+		// auto construct
+	}
 	
 	public GitRelease(int version) {
 		this.version = version;
@@ -19,6 +25,7 @@ public class GitRelease extends GitReference {
 		this.version = version;
 	}
 	
+	@XmlTransient
 	public GitPatch getLastPatch() {
 		SortedSet<GitPatch> patchVersions = getPatchVersions();
 		return !patchVersions.isEmpty() ? patchVersions.last() : null;

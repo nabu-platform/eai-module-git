@@ -4,6 +4,10 @@ public class GitReleaseCandidate extends GitReference {
 	
 	private int candidate;
 	
+	public GitReleaseCandidate() {
+		// auto construct
+	}
+	
 	public GitReleaseCandidate(String reference, int candidate) {
 		super(reference);
 		this.candidate = candidate;
