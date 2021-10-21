@@ -455,12 +455,10 @@ public class Services {
 				if (repository.getUsername() != null) {
 					return new BasicPrincipalImpl(repository.getUsername(), repository.getPassword());
 				}
-				else {
-					return null;
-				}
 			}
 		}
-		return null;
+		// no NPE... ugly but internal and it works for now
+		return new BasicPrincipalImpl();
 	}
 	
 	public void clone(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "endpoint") URI uri, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws InvalidRemoteException, TransportException, GitAPIException {
