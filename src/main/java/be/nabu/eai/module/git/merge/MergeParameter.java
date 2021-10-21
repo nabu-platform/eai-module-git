@@ -15,6 +15,10 @@ public class MergeParameter {
 	private List<String> enumeration;
 	// a description for the user
 	private String description;
+	// the priority of this parameter
+	// if there are a lot of parameters, the priority can allow a user to pinpoint the important bits
+	// higher priority means it will be listed more towards the top
+	private int priority;
 	// whether or not the parameter is optional and/or (potentially) encrypted
 	private boolean optional, encrypted;
 	// this keeps track of whether the _raw_ value was changed
@@ -93,5 +97,11 @@ public class MergeParameter {
 	}
 	public void setChanged(boolean changed) {
 		this.changed = changed;
+	}
+	public int getPriority() {
+		return priority;
+	}
+	public void setPriority(int priority) {
+		this.priority = priority;
 	}
 }

@@ -75,8 +75,9 @@ public class GitMethods {
 			@GlueParam(name = "encrypted") Boolean encrypted,
 			@GlueParam(name = "optional") Boolean optional,
 			@GlueParam(name = "raw") String raw,
+			@GlueParam(name = "priority") Integer priority,
 			// possible values
-			@GlueParam(name = "values") String...values) {
+			@GlueParam(name = "enumeration") String...values) {
 		if (name == null || name.trim().isEmpty()) {
 			throw new IllegalArgumentException("Name is mandatory");
 		}
@@ -136,6 +137,9 @@ public class GitMethods {
 		}
 		if (values != null && values.length > 0) {
 			result.setEnumeration(Arrays.asList(values));
+		}
+		if (priority != null) {
+			result.setPriority(priority);
 		}
 		return result;
 	}
