@@ -102,10 +102,14 @@ public class GitMethods {
 				result.setOptional(previousParameter.isOptional());
 				result.setType(previousParameter.getType());
 				result.setCurrent(previousParameter.getCurrent());
+				result.setChanged((raw == null && previousParameter.getRaw() != null) || (raw != null && !raw.equals(previousParameter.getRaw())));
 			}
 			else {
 				// inherit from dev
 				result.setCurrent(raw);
+				// there is no previous parameter, from the merging perspective, its been changed
+				// it could also be that you added a new field that did not exist before, it is again "new"
+				result.setChanged(true);
 			}
 		}
 		if (description != null) {

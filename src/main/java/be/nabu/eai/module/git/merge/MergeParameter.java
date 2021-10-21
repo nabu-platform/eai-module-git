@@ -17,6 +17,10 @@ public class MergeParameter {
 	private String description;
 	// whether or not the parameter is optional and/or (potentially) encrypted
 	private boolean optional, encrypted;
+	// this keeps track of whether the _raw_ value was changed
+	// usually when you change something in an environment specific field, it needs a similar change in other environments
+	// we already flag the entire entry if its been changed, but we can also flag the particular fields
+	private boolean changed;
 
 	public String getName() {
 		return name;
@@ -83,5 +87,11 @@ public class MergeParameter {
 	}
 	public void setEnumeration(List<String> enumeration) {
 		this.enumeration = enumeration;
+	}
+	public boolean isChanged() {
+		return changed;
+	}
+	public void setChanged(boolean changed) {
+		this.changed = changed;
 	}
 }

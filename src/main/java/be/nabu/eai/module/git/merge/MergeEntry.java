@@ -23,6 +23,9 @@ public class MergeEntry {
 	// the id of the entry (only ever nodes?)
 	// we also copy any description to the merge state, this can aid the user in determining what it is about
 	private String entryId, log, errorLog, description, summary, comment;
+	// this can contain queries to either show or hide the field, depending on other state
+	// note that this should be glue syntax but translateable to javascript as that is the most likely scenario for display
+	private String show, hide;
 	// the parameters that the user can play with if needed
 	private List<MergeParameter> parameters;
 	// whether or not the user should really check this
@@ -114,5 +117,17 @@ public class MergeEntry {
 	}
 	public void setModified(Date modified) {
 		this.modified = modified;
+	}
+	public String getShow() {
+		return show;
+	}
+	public void setShow(String show) {
+		this.show = show;
+	}
+	public String getHide() {
+		return hide;
+	}
+	public void setHide(String hide) {
+		this.hide = hide;
 	}
 }
