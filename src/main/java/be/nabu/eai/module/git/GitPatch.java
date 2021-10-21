@@ -3,10 +3,13 @@ package be.nabu.eai.module.git;
 import java.util.ArrayList;
 import java.util.List;
 
+import javax.xml.bind.annotation.XmlTransient;
+
 public class GitPatch extends GitReference {
 	private int patch;
 	private List<GitEnvironment> environments;
 	private GitRelease release;
+	private String branch;
 	public GitPatch(GitRelease release, int patch) {
 		this.release = release;
 		this.patch = patch;
@@ -44,7 +47,7 @@ public class GitPatch extends GitReference {
 		builder.append("}");
 		return builder.toString();
 	}
-	
+	@XmlTransient
 	public GitRelease getRelease() {
 		return release;
 	}
@@ -53,6 +56,9 @@ public class GitPatch extends GitReference {
 	}
 	
 	public String getBranch() {
-		return release.getBranch() + "." + patch;
+		return branch == null ? release.getBranch() + "." + patch : branch;
+	}
+	public void setBranch(String branch) {
+		this.branch = branch;
 	}
 }

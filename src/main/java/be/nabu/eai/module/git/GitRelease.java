@@ -7,6 +7,7 @@ import java.util.TreeSet;
 public class GitRelease extends GitReference {
 	private int version;
 	private TreeSet<GitPatch> patchVersions;
+	private String branch;
 	
 	public GitRelease(int version) {
 		this.version = version;
@@ -57,6 +58,9 @@ public class GitRelease extends GitReference {
 	}
 	
 	public String getBranch() {
-		return "r" + version;
+		return branch == null ? "r" + version : branch;
+	}
+	public void setBranch(String branch) {
+		this.branch = branch;
 	}
 }

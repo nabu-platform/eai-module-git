@@ -40,23 +40,20 @@ public class GitReference {
 		this.commit = commit;
 	}
 	
-	public void setCommit(RevCommit commit) {
+	
+	@XmlTransient
+	public RevCommit getRevCommit() {
+		return revCommit;
+	}
+	public void setRevCommit(RevCommit commit) {
 		date = GitUtils.getCommitDate(commit);
-			
+		
 		author = commit.getAuthorIdent().getName();
 		email = commit.getAuthorIdent().getEmailAddress();
 		this.commit = commit.getId().getName();
 		this.revCommit = commit;
 		
 		System.out.println("set: " + date + " :: " + author + " :: " + this.commit);
-	}
-	
-	@XmlTransient
-	public RevCommit getRevCommit() {
-		return revCommit;
-	}
-	public void setRevCommit(RevCommit revCommit) {
-		this.revCommit = revCommit;
 	}
 	
 	public Date getDate() {

@@ -8,6 +8,7 @@ public class GitEnvironment extends GitReference {
 	private String name;
 	private SortedSet<GitReleaseCandidate> releaseCandidates;
 	private GitPatch patch;
+	private String branch;
 	public GitEnvironment(GitPatch patch, String name) {
 		this.patch = patch;
 		this.name = name;
@@ -59,7 +60,10 @@ public class GitEnvironment extends GitReference {
 		this.patch = patch;
 	}
 	public String getBranch() {
-		return patch.getBranch() + "-" + name;
+		return branch == null ? patch.getBranch() + "-" + name : branch;
+	}
+	public void setBranch(String branch) {
+		this.branch = branch;
 	}
 	
 }

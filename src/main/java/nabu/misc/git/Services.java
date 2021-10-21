@@ -1,21 +1,28 @@
 package nabu.misc.git;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.URI;
+import java.nio.charset.Charset;
+import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.TreeSet;
 import java.util.concurrent.ExecutionException;
 
 import javax.jws.WebParam;
 import javax.jws.WebService;
+import javax.validation.constraints.NotNull;
 
 import org.eclipse.jgit.api.AddCommand;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.Status;
+import org.eclipse.jgit.api.TransportCommand;
 import org.eclipse.jgit.api.errors.AbortedByHookException;
 import org.eclipse.jgit.api.errors.CheckoutConflictException;
 import org.eclipse.jgit.api.errors.ConcurrentRefUpdateException;
@@ -33,12 +40,16 @@ import org.eclipse.jgit.api.errors.UnmergedPathsException;
 import org.eclipse.jgit.api.errors.WrongRepositoryStateException;
 import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.lib.Ref;
+import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.transport.RemoteConfig;
+import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import be.nabu.eai.module.deployment.action.DeploymentAction;
+import be.nabu.eai.module.git.GitRelease;
 import be.nabu.eai.module.git.GitRepository;
+import be.nabu.eai.module.git.merge.MergeResult;
 import be.nabu.eai.repository.EAIRepositoryUtils;
 import be.nabu.eai.repository.EAIResourceRepository;
 import be.nabu.eai.repository.api.Entry;
@@ -49,6 +60,12 @@ import be.nabu.libs.resources.api.ResourceContainer;
 import be.nabu.libs.resources.file.FileDirectory;
 import be.nabu.libs.services.ServiceRuntime;
 import be.nabu.libs.services.api.ServiceException;
+import be.nabu.libs.types.TypeUtils;
+import be.nabu.libs.types.api.ComplexType;
+import be.nabu.libs.types.binding.api.Window;
+import be.nabu.libs.types.binding.xml.XMLBinding;
+import be.nabu.libs.types.java.BeanResolver;
+import nabu.misc.git.types.GitBuild;
 
 // if we are releasing on the same server, we clone the directory of the project itself
 // we can't really cache the git repositories because the nabu server might be clustered (though they should use a shared drive then)
@@ -111,11 +128,11 @@ public class Services {
 	// we commit on the current branch (whichever that is) and push it to the origin (if any)
 	// this could be the master branch
 	// any deployment actions that reside within the id are run before committing
-	public void commit(@WebParam(name = "id") String id, @WebParam(name = "message") String message) throws IllegalStateException, GitAPIException, FileNotFoundException, IOException, ServiceException, InterruptedException, ExecutionException {
-		commitInternal(id, message, true);
+	public void commit(@NotNull @WebParam(name = "id") String id, @WebParam(name = "message") String message, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws IllegalStateException, GitAPIException, FileNotFoundException, IOException, ServiceException, InterruptedException, ExecutionException {
+		commitInternal(id, message, true, username, password);
 	}
 
-	private Git commitInternal(String id, String message, boolean push) throws GitAPIException, IOException, FileNotFoundException, NoFilepatternException, AbortedByHookException, ConcurrentRefUpdateException, NoHeadException, NoMessageException, ServiceUnavailableException, UnmergedPathsException, WrongRepositoryStateException, RefAlreadyExistsException, RefNotFoundException, InvalidRefNameException, CheckoutConflictException, ServiceException, InterruptedException, ExecutionException, InvalidRemoteException, TransportException {
+	private Git commitInternal(String id, String message, boolean push, String username, String password) throws GitAPIException, IOException, FileNotFoundException, NoFilepatternException, AbortedByHookException, ConcurrentRefUpdateException, NoHeadException, NoMessageException, ServiceUnavailableException, UnmergedPathsException, WrongRepositoryStateException, RefAlreadyExistsException, RefNotFoundException, InvalidRefNameException, CheckoutConflictException, ServiceException, InterruptedException, ExecutionException, InvalidRemoteException, TransportException {
 		Token token = ServiceRuntime.getRuntime().getExecutionContext().getSecurityContext().getToken();
 		
 		EAIResourceRepository repository = EAIResourceRepository.getInstance();
@@ -194,7 +211,7 @@ public class Services {
 				List<RemoteConfig> call = git.remoteList().call();
 				for (RemoteConfig config : call) {
 					if (remote.equals(config.getName())) {
-						git.push().setRemote(remote).call();
+						authenticate(git.push(), username, password).setRemote(remote).call();
 					}
 				}
 			}
@@ -203,13 +220,20 @@ public class Services {
 		return git;
 	}
 	
+	private <T extends TransportCommand<?, ?>> T authenticate(T command, String username, String password) {
+		if (username != null) {
+			command.setCredentialsProvider(new UsernamePasswordCredentialsProvider(username, password));
+		}
+		return command;
+	}
+	
 	// we release an entire project
 	// we first run the deployment actions (source)
 	// then do a final commit (see above)
 	// then merge the dev branch into the master
 	// then push the master to the origin (if available)
 	// this can start a remote build
-	public void release(@WebParam(name = "projectId") String projectId, @WebParam(name = "message") String message) throws IllegalStateException, FileNotFoundException, GitAPIException, IOException, ServiceException, InterruptedException, ExecutionException {
+	public void release(@WebParam(name = "projectId") String projectId, @WebParam(name = "message") String message, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws IllegalStateException, FileNotFoundException, GitAPIException, IOException, ServiceException, InterruptedException, ExecutionException {
 		Token token = ServiceRuntime.getRuntime().getExecutionContext().getSecurityContext().getToken();
 		
 		Entry entry = EAIResourceRepository.getInstance().getEntry(projectId);
@@ -217,7 +241,7 @@ public class Services {
 			throw new IllegalArgumentException("Not a valid project id: " + projectId);
 		}
 		// first we run a commit cycle, we don't push yet, we first want to tag
-		Git git = commitInternal(projectId, "Commit for release", false);
+		Git git = commitInternal(projectId, "Commit for release", false, username, password);
 		
 		// then we tag it
 		// first we check what the highest version was that we tagged before
@@ -244,9 +268,47 @@ public class Services {
 		for (RemoteConfig config : call) {
 			if (remote.equals(config.getName())) {
 				// we also push ze tags!
-				git.push().setPushTags().setRemote(remote).call();
+				authenticate(git.push(), username, password).setPushTags().setRemote(remote).call();
 			}
 		}
+	}
+	
+	public GitBuild buildInformation(@NotNull @WebParam(name = "name") String name) {
+		name = name.replaceAll("[^\\w]+", "_");
+		File builds = getBuildsFolder();
+		File file = new File(builds, name);
+		File git = new File(file, ".git");
+		if (!git.exists()) {
+			throw new IllegalArgumentException("There is no build with the name: " + name);
+		}
+		GitRepository repository = new GitRepository(file, name);
+		GitBuild build = new GitBuild();
+		build.setReleases(new ArrayList<GitRelease>(repository.getVersions()));
+		return build;
+	}
+	
+	public MergeResult getMergeResult(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch) throws IOException, ParseException {
+		name = name.replaceAll("[^\\w]+", "_");
+		File builds = getBuildsFolder();
+		File file = new File(builds, name);
+		File git = new File(file, ".git");
+		if (!git.exists()) {
+			throw new IllegalArgumentException("There is no build with the name: " + name);
+		}
+		GitRepository repository = new GitRepository(file, name);
+		return repository.getMergeResult(branch);
+	}
+	
+	public void setMergeResult(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch, @WebParam(name = "result") MergeResult result) {
+		name = name.replaceAll("[^\\w]+", "_");
+		File builds = getBuildsFolder();
+		File file = new File(builds, name);
+		File git = new File(file, ".git");
+		if (!git.exists()) {
+			throw new IllegalArgumentException("There is no build with the name: " + name);
+		}
+		GitRepository repository = new GitRepository(file, name);
+		repository.setMergeResult(branch, result);
 	}
 	
 	// we can "build" a project
@@ -254,8 +316,45 @@ public class Services {
 	// if it exists, it will work from there
 	// if it doesn't exist yet, it will check the repo for a project by that name and start from there.
 	// otherwise, it will throw an exception
-	public void build(String id) {
-		
+	public void build(@WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws InvalidRemoteException, TransportException, GitAPIException {
+		name = name.replaceAll("[^\\w]+", "_");
+		File builds = getBuildsFolder();
+		File file = new File(builds, name);
+		// if we don't find the file, let's check if we can clone it from the current repository
+		if (!file.exists()) {
+			Entry entry = EAIResourceRepository.getInstance().getEntry(name);
+			if (entry instanceof ResourceEntry) {
+				ResourceContainer<?> container = ((ResourceEntry) entry).getContainer();
+				if (container instanceof FileDirectory) {
+					File project = ((FileDirectory) container).getFile();
+					clone(name, project.toURI(), username, password);
+				}
+			}
+		}
+		File git = new File(file, ".git");
+		if (!git.exists()) {
+			throw new IllegalArgumentException("There is no build with the name: " + name);
+		}
+		GitRepository repository = new GitRepository(file, name);
+		// we'll first check for new version tags
+		repository.checkForVersionUpdates();
+		// then we'll check for secondary updates
+		repository.checkForSecondaryUpdates();
 	}
 	
+	public void clone(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "endpoint") URI uri, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws InvalidRemoteException, TransportException, GitAPIException {
+		name = name.replaceAll("[^\\w]+", "_");
+		File builds = getBuildsFolder();
+		authenticate(Git.cloneRepository().setURI(uri.toASCIIString()), username, password).setDirectory(new File(builds, name)).call();
+	}
+
+	private File getBuildsFolder() {
+		File directory = new File(System.getProperty("git.build", System.getProperty("user.home")));
+		File nabu = new File(directory, ".nabu");
+		File builds = new File(nabu, "builds");
+		if (!builds.exists()) {
+			builds.mkdirs();
+		}
+		return builds;
+	}
 }

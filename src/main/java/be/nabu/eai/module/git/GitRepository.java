@@ -13,6 +13,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.URI;
 import java.nio.charset.Charset;
+import java.text.ParseException;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.Date;
@@ -27,6 +28,7 @@ import javax.xml.bind.JAXBContext;
 
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.PullResult;
+import org.eclipse.jgit.api.TransportCommand;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.api.errors.InvalidRefNameException;
 import org.eclipse.jgit.api.errors.NoHeadException;
@@ -39,13 +41,15 @@ import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.transport.TagOpt;
+import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
 import org.eclipse.jgit.treewalk.TreeWalk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import be.nabu.eai.module.git.merge.MergeEntry;
-import be.nabu.eai.module.git.merge.MergeResult;
+import be.nabu.eai.module.git.merge.MergeParameter;
 import be.nabu.eai.module.git.merge.MergeEntry.MergeState;
+import be.nabu.eai.module.git.merge.MergeResult;
 import be.nabu.eai.repository.EAIResourceRepository;
 import be.nabu.glue.api.ExecutionEnvironment;
 import be.nabu.glue.api.Executor;
@@ -68,6 +72,7 @@ import be.nabu.libs.types.binding.xml.XMLBinding;
 import be.nabu.libs.types.java.BeanInstance;
 import be.nabu.libs.types.java.BeanResolver;
 import be.nabu.utils.io.IOUtils;
+import be.nabu.utils.security.EncryptionXmlAdapter;
 
 /**
  * GOALS:
@@ -139,6 +144,19 @@ import be.nabu.utils.io.IOUtils;
 // this would not work in a development scenario
 // we want to be able to work
 
+/**
+ * # SSH
+ * 
+ * I looked into using SSH, in the past jgit used jsch for ssh access but this has been deprecated and support for it will be removed at some point.
+ * They have switched to apache mina ssh, you need to include maven dependency for org.eclipse.jgit.ssh.apache to get it.
+ * The problem that I saw with this approach is that the apache library seems to (from the examples online and the methods available in SshdSessionFactoryBuilder) to only support file-based ssh keys.
+ * This means I could not use ssh keys that are stored in an encrypted keystore but would be forced to write them plain text to the file system.
+ * Yes, you can set an additional textual key on the actual key, but again this needs to be saved somewhere.
+ * At that point, from a security perspective this is hardly any better than saving an access token (password) somewhere.
+ * There might be a hack when constructing a SshdSessionFactory to give it a special key cache that knows the repository. However, even that spec still uses Path items to locate the key.
+ * 
+ */
+
 public class GitRepository {
 	private String branch = "master";
 	// the name of the remote, e.g. "origin"
@@ -151,6 +169,7 @@ public class GitRepository {
 	private Logger logger = LoggerFactory.getLogger(getClass());
 	private File folder;
 	private String projectName;
+	private String username, password;
 	
 	public static void main(String...args) throws IOException, NoHeadException, GitAPIException {
 		GitRepository gitRepository = new GitRepository(new File("/home/alex/.nabu/repositories/local-test/test"));
@@ -202,6 +221,13 @@ public class GitRepository {
 			}
 		}
 		createEnvironmentBranch(lastPatch.getRelease(), lastPatch, name, originalEnvironment);
+	}
+	
+	private <T extends TransportCommand<?, ?>> T authenticate(T command) {
+		if (username != null) {
+			command.setCredentialsProvider(new UsernamePasswordCredentialsProvider(username, password));
+		}
+		return command;
 	}
 	
 	// secondary updates are on separate branches, we check the last commits to see if we have for example applied a hotfix, or changed the settings of a particular RC candidate
@@ -301,7 +327,7 @@ public class GitRepository {
 			if (remote != null) {
 				// pull the latest data, including the tags (we are looking for version tags)
 				logger.info("Pulling last data for branch '" + branch + "' from '" + remote + "'");
-				PullResult call = git.pull().setTagOpt(TagOpt.FETCH_TAGS).setRemote(remote).call();
+				PullResult call = authenticate(git.pull()).setTagOpt(TagOpt.FETCH_TAGS).setRemote(remote).call();
 				if (!call.getMergeResult().getConflicts().isEmpty()) {
 					throw new RuntimeException("Merge conflicts detected: " + call);
 				}
@@ -326,7 +352,7 @@ public class GitRepository {
 							getVersions().add(newVersion);
 							// we create the new branch
 							git.branchCreate().setStartPoint(commit).setName(newBranchName).call();
-							newVersion.setCommit(commit);
+							newVersion.setRevCommit(commit);
 							createPatch(newVersion, 0);
 						}
 					}
@@ -356,7 +382,7 @@ public class GitRepository {
 			if (remote != null) {
 				// pull the latest data
 				logger.info("Pulling last data for branch '" + branch + "' from '" + remote + "'");
-				PullResult call = git.pull().setRemote(remote).call();
+				PullResult call = authenticate(git.pull()).setRemote(remote).call();
 				if (!call.getMergeResult().getConflicts().isEmpty()) {
 					throw new RuntimeException("Merge conflicts detected: " + call);
 				}
@@ -376,7 +402,7 @@ public class GitRepository {
 					getVersions().add(newVersion);
 					// we create the new branch
 					Ref call = git.branchCreate().setName(newBranchName).call();
-					newVersion.setCommit(getCommit(call));
+					newVersion.setRevCommit(getCommit(call));
 					createPatch(newVersion, 0);
 				}
 			}
@@ -391,7 +417,7 @@ public class GitRepository {
 		GitPatch patch = new GitPatch(newVersion, patchVersion);
 		// immediately create a fix version 0 branch
 		Ref call = git.branchCreate().setName(patch.getBranch()).call();
-		patch.setCommit(getCommit(call));
+		patch.setRevCommit(getCommit(call));
 		
 		logger.info("Created patch version version '" + patch.getBranch() + "'");
 		
@@ -438,10 +464,100 @@ public class GitRepository {
 			logger.info("Created new environment '" + environmentBranch + "'");
 			
 			GitEnvironment environment = new GitEnvironment(patch, name);
-			environment.setCommit(getCommit(call));
+			environment.setRevCommit(getCommit(call));
 			patch.getEnvironments().add(environment);
 			
 			merge(environment, original);
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+	
+	public MergeResult getMergeResult(String branch) {
+		RevCommit lastCommitOn = getLastCommitOn(branch);
+		
+		try {
+			if (lastCommitOn != null) {
+				byte[] read = read("merge-result.xml", lastCommitOn);
+				if (read != null) {
+					XMLBinding binding = new XMLBinding((ComplexType) BeanResolver.getInstance().resolve(MergeResult.class), Charset.forName("UTF-8"));
+					return decrypt(TypeUtils.getAsBean(binding.unmarshal(new ByteArrayInputStream(read), new Window[0]), MergeResult.class));
+				}
+			}
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+		
+		return null;
+	}
+	
+	private MergeResult decrypt(MergeResult result) throws Exception {
+		if (result != null && result.getEntries() != null) {
+			for (MergeEntry entry : result.getEntries()) {
+				for (MergeParameter parameter : entry.getParameters()) {
+					if (parameter.isEncrypted()) {
+						EncryptionXmlAdapter encryptionXmlAdapter = new EncryptionXmlAdapter();
+						if (parameter.getRaw() != null) {
+							parameter.setRaw(encryptionXmlAdapter.unmarshal(parameter.getRaw()));
+						}
+						if (parameter.getCurrent() != null) {
+							parameter.setCurrent(encryptionXmlAdapter.unmarshal(parameter.getCurrent()));
+						}
+						if (parameter.getPrevious() != null) {
+							parameter.setPrevious(encryptionXmlAdapter.unmarshal(parameter.getPrevious()));
+						}
+					}
+				}
+			}
+		}
+		return result;
+	}
+	
+	private MergeResult encrypt(MergeResult result) throws Exception {
+		if (result != null && result.getEntries() != null) {
+			for (MergeEntry entry : result.getEntries()) {
+				for (MergeParameter parameter : entry.getParameters()) {
+					if (parameter.isEncrypted()) {
+						EncryptionXmlAdapter encryptionXmlAdapter = new EncryptionXmlAdapter();
+						if (parameter.getRaw() != null) {
+							parameter.setRaw(encryptionXmlAdapter.marshal(parameter.getRaw()));
+						}
+						if (parameter.getCurrent() != null) {
+							parameter.setCurrent(encryptionXmlAdapter.marshal(parameter.getCurrent()));
+						}
+						if (parameter.getPrevious() != null) {
+							parameter.setPrevious(encryptionXmlAdapter.marshal(parameter.getPrevious()));
+						}
+					}
+				}
+			}
+		}
+		return result;
+	}
+	
+	synchronized public void setMergeResult(String branch, MergeResult result) {
+		try {
+			try {
+				git.checkout().setName(branch).call();
+				File file = new File(folder, "merge-result.xml");
+				if (result == null) {
+					if (file.exists()) {
+						file.delete();
+					}
+				}
+				else {
+					XMLBinding binding = new XMLBinding((ComplexType) BeanResolver.getInstance().resolve(MergeResult.class), Charset.forName("UTF-8"));
+					binding.setPrettyPrint(true);
+					try (OutputStream output = new BufferedOutputStream(new FileOutputStream(file))) {
+						binding.marshal(output, new BeanInstance<MergeResult>(encrypt(result)));
+					}
+				}
+			}
+			finally {
+				git.checkout().setName(this.branch).call();
+			}
 		}
 		catch (Exception e) {
 			throw new RuntimeException(e);
@@ -526,7 +642,7 @@ public class GitRepository {
 			git.commit().setAll(true).setMessage("Merged for RC" + candidateVersion).call();
 			Ref call = git.tag().setName(fullName).call();
 			GitReleaseCandidate rc = new GitReleaseCandidate(call.getName(), candidateVersion);
-			rc.setCommit(getCommit(call));
+			rc.setRevCommit(getCommit(call));
 			current.getReleaseCandidates().add(rc);
 			logger.info("Created release candidate '" + fullName + "'");
 			// switch back to the main branch
@@ -754,7 +870,7 @@ public class GitRepository {
 	 * 
 	 * You can create a patch version, e.g. r1.1. This is optional and done as a straight branch on r1 in this case.
 	 */
-	private TreeSet<GitRelease> getVersions() {
+	public TreeSet<GitRelease> getVersions() {
 		if (versions == null) {
 			synchronized(this) {
 				if (versions == null) {
@@ -776,17 +892,17 @@ public class GitRepository {
 						if (name.matches("^r[0-9]+$")) {
 							GitRelease version = getVersion(versions, name);
 							version.setReference(ref.getName());
-							version.setCommit(getCommit(ref));
+							version.setRevCommit(getCommit(ref));
 						}
 						else if (name.matches("^r[0-9]+\\.[0-9]+$")) {
 							GitPatch patchVersion = getPatchVersion(versions, name);
 							patchVersion.setReference(ref.getName());
-							patchVersion.setCommit(getCommit(ref));
+							patchVersion.setRevCommit(getCommit(ref));
 						}
 						else if (name.matches("^r[0-9]+\\.[0-9]+-.+$")) {
 							GitEnvironment environment = getEnvironment(versions, name);
 							environment.setReference(ref.getName());
-							environment.setCommit(getCommit(ref));
+							environment.setRevCommit(getCommit(ref));
 						}
 					}
 					for (Ref ref : getTags()) {
@@ -797,7 +913,7 @@ public class GitRepository {
 							GitEnvironment environment = getEnvironment(versions, name);
 							String rc = ref.getName().replaceAll(".*-RC([0-9]+)$", "$1");
 							GitReleaseCandidate releaseCandidate = new GitReleaseCandidate(ref.getName(), Integer.parseInt(rc));
-							releaseCandidate.setCommit(getCommit(ref));
+							releaseCandidate.setRevCommit(getCommit(ref));
 							environment.getReleaseCandidates().add(releaseCandidate);
 						}
 					}
@@ -822,7 +938,7 @@ public class GitRepository {
 		}
 	}
 	
-	private RevCommit getLastCommitOn(String name) {
+	public RevCommit getLastCommitOn(String name) {
 		Iterable<RevCommit> commitsOn = getCommitsOn(name);
 		Iterator<RevCommit> iterator = commitsOn.iterator();
 		if (iterator.hasNext()) {
