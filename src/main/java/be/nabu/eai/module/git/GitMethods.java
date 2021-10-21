@@ -159,6 +159,12 @@ public class GitMethods {
 		return null;
 	}
 	
+	// apply tags to the entry (for filtering etc in merge view)
+	public void tag(String...tag) {
+		MergeEntry merged = merged();
+		merged.setTags(tag == null || tag.length == 0 ? null : new ArrayList<String>(Arrays.asList(tag)));
+	}
+	
 	protected MergeEntry merged() {
 		MergeEntry entry = null;
 		if (result != null && result.getEntries() != null && currentEntryId != null) {
