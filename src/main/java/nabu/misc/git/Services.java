@@ -379,23 +379,23 @@ public class Services {
 		}
 	}
 	
-	public void configure(@NotNull @WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password, @WebParam(name = "description") String description) throws FileNotFoundException, IOException, ParseException {
+	public void configure(@NotNull @WebParam(name = "configuration") GitInformation configuration) throws FileNotFoundException, IOException, ParseException {
 		GitInformations buildFile = getBuildFile();
 		GitInformation information = null;
 		for (GitInformation possible : buildFile.getRepositories()) {
-			if (possible.getName().equals(name)) {
+			if (possible.getName().equals(configuration.getName())) {
 				information = possible;
 				break;
 			}
 		}
 		if (information == null) {
 			information = new GitInformation();
-			information.setName(name);
+			information.setName(configuration.getName());
 			buildFile.getRepositories().add(information);
 		}
-		information.setUsername(username);
-		information.setPassword(password);
-		information.setDescription(description);
+		information.setUsername(configuration.getUsername());
+		information.setPassword(configuration.getPassword());
+		information.setDescription(configuration.getDescription());
 		saveBuildFile(buildFile);
 	}
 	

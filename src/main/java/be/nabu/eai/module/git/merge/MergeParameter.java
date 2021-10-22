@@ -25,6 +25,8 @@ public class MergeParameter {
 	// usually when you change something in an environment specific field, it needs a similar change in other environments
 	// we already flag the entire entry if its been changed, but we can also flag the particular fields
 	private boolean changed;
+	// you can choose that for a particular build, a particular parameter is not relevant
+	private boolean ignore;
 
 	public String getName() {
 		return name;
@@ -103,5 +105,11 @@ public class MergeParameter {
 	}
 	public void setPriority(int priority) {
 		this.priority = priority;
+	}
+	public boolean isIgnore() {
+		return ignore;
+	}
+	public void setIgnore(boolean ignore) {
+		this.ignore = ignore;
 	}
 }

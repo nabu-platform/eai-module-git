@@ -104,6 +104,7 @@ public class GitMethods {
 				result.setType(previousParameter.getType());
 				result.setCurrent(previousParameter.getCurrent());
 				result.setChanged((raw == null && previousParameter.getRaw() != null) || (raw != null && !raw.equals(previousParameter.getRaw())));
+				result.setIgnore(previousParameter.isIgnore());
 			}
 			else {
 				// inherit from dev
