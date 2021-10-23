@@ -45,6 +45,7 @@ import org.eclipse.jgit.lib.ObjectReader;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
+import org.eclipse.jgit.transport.RemoteConfig;
 import org.eclipse.jgit.transport.TagOpt;
 import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
 import org.eclipse.jgit.treewalk.TreeWalk;
@@ -169,7 +170,12 @@ import nabu.misc.git.types.MergeEntry.MergeState;
 public class GitRepository {
 	private String branch = "master";
 	// the name of the remote, e.g. "origin"
+	// this is where we fetch the data
 	private String remote = "origin";
+	// this is where we store the build data
+	// for security reasons, this is not pushed to origin
+	// though if you want to, you can set these two to the same point
+	private String remoteBuild = "build";
 	private Git git;
 	private TreeSet<GitRelease> versions;
 	// how many versions we check
@@ -752,6 +758,15 @@ public class GitRepository {
 			logger.info("Created release candidate '" + fullName + "'");
 			// switch back to the main branch
 			git.checkout().setName(branch).call();
+			
+			// push it remotely if possible
+			List<RemoteConfig> remoteCall = git.remoteList().call();
+			for (RemoteConfig config : remoteCall) {
+				if (remoteBuild.equals(config.getName())) {
+					// we also push ze tags!
+					authenticate(git.push()).setPushAll().setRemote(remoteBuild).call();
+				}
+			}
 		}
 		catch (Exception e) {
 			throw new RuntimeException(e);

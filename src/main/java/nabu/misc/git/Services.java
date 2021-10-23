@@ -216,7 +216,6 @@ public class Services {
 	public void release(@WebParam(name = "id") String id, @WebParam(name = "message") String message, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws IllegalStateException, FileNotFoundException, GitAPIException, IOException, ServiceException, InterruptedException, ExecutionException, ParseException {
 		Token token = ServiceRuntime.getRuntime().getExecutionContext().getSecurityContext().getToken();
 		
-		
 		Entry entry = EAIResourceRepository.getInstance().getEntry(id);
 		if (!EAIRepositoryUtils.isProject(entry)) {
 			throw new IllegalArgumentException("Not a valid project id: " + id);
