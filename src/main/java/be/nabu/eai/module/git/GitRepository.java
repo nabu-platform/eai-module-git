@@ -16,6 +16,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.charset.Charset;
 import java.text.ParseException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.Date;
@@ -50,6 +51,7 @@ import org.eclipse.jgit.treewalk.TreeWalk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import be.nabu.eai.module.git.merge.BuildInformation;
 import be.nabu.eai.module.git.merge.MergeEntry;
 import be.nabu.eai.module.git.merge.MergeParameter;
 import be.nabu.eai.module.git.merge.MergeEntry.MergeState;
@@ -691,7 +693,8 @@ public class GitRepository {
 			
 			SimpleExecutionEnvironment environment = new SimpleExecutionEnvironment("default");
 			Map<URI, String> resolved = new HashMap<URI, String>();
-			merge(folder, projectName, repository, methods, resolved, environment);
+			List<GitNode> nodes = new ArrayList<GitNode>();
+			merge(folder, projectName, repository, methods, resolved, environment, nodes);
 			
 			MergeState state = MergeState.SUCCEEDED;
 			if (result.getEntries() != null) {
@@ -714,6 +717,35 @@ public class GitRepository {
 			int candidateVersion = previousRc == null ? 1 : previousRc.getCandidate() + 1;
 			String fullName = current.getBranch() + "-RC" + candidateVersion;
 			
+			// the merge result is necessary for the merging but is not exposed once we download the end result
+			// the build information is a rather static file, specifically aimed at informing the end-user of which version the resulting zip is
+			// we can also include other data like required references
+			File buildFile = new File(folder, "build.xml");
+			XMLBinding buildBinding = new XMLBinding((ComplexType) BeanResolver.getInstance().resolve(BuildInformation.class), Charset.forName("UTF-8"));
+			buildBinding.setPrettyPrint(true);
+			BuildInformation build = null;
+			// if we have a file, load it
+			if (buildFile.exists()) {
+				try (InputStream input = new BufferedInputStream(new FileInputStream(buildFile))) {
+					build = TypeUtils.getAsBean(binding.unmarshal(input, new Window[0]), BuildInformation.class);
+				}
+			}
+			// if we don't have a merge result available, create a new one
+			if (build == null) {
+				build = new BuildInformation();
+			}
+			build.setBuilt(new Date());
+			build.setTag(fullName);
+			build.setRelease(current.getPatch().getRelease().getVersion());
+			build.setPatch(current.getPatch().getPatch());
+			build.setEnvironment(current.getName());
+			build.setRc(candidateVersion);
+			build.setDependencies(calculateDependencies(nodes));
+			// write the merge result
+			try (OutputStream output = new BufferedOutputStream(new FileOutputStream(buildFile))) {
+				binding.marshal(output, new BeanInstance<BuildInformation>(build));
+			}
+			
 			// commit the resulting branch
 			git.add().addFilepattern(".").call();
 			git.commit().setAll(true).setMessage("Merged for RC" + candidateVersion).call();
@@ -728,6 +760,24 @@ public class GitRepository {
 		catch (Exception e) {
 			throw new RuntimeException(e);
 		}
+	}
+	
+	private List<String> calculateDependencies(List<GitNode> nodes) {
+		List<String> inBuild = new ArrayList<String>();
+		for (GitNode node : nodes) {
+			inBuild.add(node.getId());
+		}
+		List<String> dependencies = new ArrayList<String>();
+		for (GitNode node : nodes) {
+			if (node.getReferences() != null) {
+				for (String reference : node.getReferences()) {
+					if (!dependencies.contains(reference) && !inBuild.contains(reference)) {
+						dependencies.add(reference);
+					}
+				}
+			}
+		}
+		return dependencies;
 	}
 	
 	private JAXBContext nodeContext;
@@ -745,12 +795,14 @@ public class GitRepository {
 	}
 	
 	// the path is the "." separated entry id path
-	private void merge(File folder, String path, DynamicScriptRepository repository, GitMethods methods, Map<URI, String> resolved, ExecutionEnvironment environment) {
+	private void merge(File folder, String path, DynamicScriptRepository repository, GitMethods methods, Map<URI, String> resolved, ExecutionEnvironment environment, List<GitNode> nodes) {
 		// check if we have a node
 		File nodeFile = new File(folder, "node.xml");
 		if (nodeFile.exists()) {
 			try {
 				GitNode node = (GitNode) getNodeContext().createUnmarshaller().unmarshal(nodeFile);
+				node.setId(path);
+				nodes.add(node);
 				String mergeScript = node.getMergeScript();
 				
 				if (mergeScript == null) {
@@ -879,7 +931,7 @@ public class GitRepository {
 			for (File child : folder.listFiles()) {
 				if (EAIResourceRepository.isValidName(child.getName()) && child.isDirectory()) {
 					String childPath = (path == null ? "" : path + ".") + child.getName();
-					merge(child, childPath, repository, methods, resolved, environment);
+					merge(child, childPath, repository, methods, resolved, environment, nodes);
 				}
 			}
 		}

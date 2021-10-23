@@ -10,10 +10,10 @@ import javax.xml.bind.annotation.XmlRootElement;
 public class GitNode {
 	private long version;
 	private Date lastModified, created, deprecated;
-	private String environmentId;
+	private String environmentId, id;
 	private boolean hidden;
 	private String name, description, comment, summary, artifactManager;
-	private List<String> tags;
+	private List<String> tags, references;
 	private String mergeScript;
 	@XmlAttribute
 	public long getVersion() {
@@ -96,5 +96,17 @@ public class GitNode {
 	}
 	public void setArtifactManager(String artifactManager) {
 		this.artifactManager = artifactManager;
+	}
+	public List<String> getReferences() {
+		return references;
+	}
+	public void setReferences(List<String> references) {
+		this.references = references;
+	}
+	public String getId() {
+		return id;
+	}
+	public void setId(String id) {
+		this.id = id;
 	}
 }
