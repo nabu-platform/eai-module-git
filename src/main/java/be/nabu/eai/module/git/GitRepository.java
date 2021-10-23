@@ -764,7 +764,7 @@ public class GitRepository {
 			for (RemoteConfig config : remoteCall) {
 				if (remoteBuild.equals(config.getName())) {
 					// we also push ze tags!
-					authenticate(git.push()).setPushAll().setRemote(remoteBuild).call();
+					authenticate(git.push()).setPushAll().setPushTags().setRemote(remoteBuild).call();
 				}
 			}
 		}
