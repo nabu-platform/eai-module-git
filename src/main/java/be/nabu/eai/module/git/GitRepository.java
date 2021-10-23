@@ -901,6 +901,18 @@ public class GitRepository {
 						// run the merge script
 						runtime.run();
 						
+						// the parameter-based change detection is more accurate
+						// even if you changed something in the node, it might not affect the parameters
+						// we'll try it like this and change it back if needed
+						boolean parametersChanged = false;
+						for (MergeParameter parameter : merged.getParameters()) {
+							if (parameter.isChanged()) {
+								parametersChanged = true;
+								break;
+							}
+						}
+						merged.setChanged(parametersChanged);
+						
 						merged.setState(MergeState.SUCCEEDED);
 					}
 					catch (Exception e) {
