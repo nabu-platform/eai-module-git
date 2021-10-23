@@ -78,6 +78,7 @@ public class GitMethods {
 			@GlueParam(name = "priority") Integer priority,
 			@GlueParam(name = "show") String show,
 			@GlueParam(name = "hide") String hide,
+			@GlueParam(name = "default") String defaultValue,
 			// possible values
 			@GlueParam(name = "enumeration") String...values) {
 		if (name == null || name.trim().isEmpty()) {
@@ -144,6 +145,7 @@ public class GitMethods {
 		if (priority != null) {
 			result.setPriority(priority);
 		}
+		result.setDefaultValue(defaultValue);
 		result.setShow(show);
 		result.setHide(hide);
 		return result;

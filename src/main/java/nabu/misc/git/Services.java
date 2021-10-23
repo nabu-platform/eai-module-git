@@ -415,7 +415,7 @@ public class Services {
 	// if it exists, it will work from there
 	// if it doesn't exist yet, it will check the repo for a project by that name and start from there.
 	// otherwise, it will throw an exception
-	public void build(@WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws InvalidRemoteException, TransportException, GitAPIException, FileNotFoundException, IOException, ParseException {
+	public void build(@WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws InvalidRemoteException, TransportException, GitAPIException, FileNotFoundException, IOException, ParseException, IllegalStateException, ServiceException, InterruptedException, ExecutionException {
 		BasicPrincipal credentials = getCredentials(name, username, password);
 		name = name.replaceAll("[^\\w]+", "_");
 		File builds = getBuildsFolder();
@@ -427,6 +427,10 @@ public class Services {
 				ResourceContainer<?> container = ((ResourceEntry) entry).getContainer();
 				if (container instanceof FileDirectory) {
 					File project = ((FileDirectory) container).getFile();
+					// if the project is not yet version controlled, we need to add that
+					if (!new File(project, ".git").exists()) {
+						release(name, "Release for first build", username, password);
+					}
 					clone(name, project.toURI(), credentials.getName(), credentials.getPassword());
 				}
 			}

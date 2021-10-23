@@ -52,8 +52,6 @@ public class GitReference {
 		email = commit.getAuthorIdent().getEmailAddress();
 		this.commit = commit.getId().getName();
 		this.revCommit = commit;
-		
-		System.out.println("set: " + date + " :: " + author + " :: " + this.commit);
 	}
 	
 	public Date getDate() {

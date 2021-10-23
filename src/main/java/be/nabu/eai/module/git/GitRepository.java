@@ -1037,7 +1037,6 @@ public class GitRepository {
 					// to include remote:
 					// new Git(repository).branchList().setListMode(ListMode.ALL).call();
 					for (Ref ref : getBranches()) {
-						System.out.println("found branch ref: " + ref.getName());
 						String name = ref.getName();
 						// e.g. refs/heads/master
 						name = name.replaceAll("^.*/", "");
@@ -1060,7 +1059,6 @@ public class GitRepository {
 					}
 					for (Ref ref : getTags()) {
 						String name = ref.getName();
-						System.out.println("tag: " +name + " :: " + ref.getObjectId() + " :: " + ref.getLeaf());
 						name = name.replaceAll("^.*/", "");
 						if (name.matches("^r[0-9]+\\.[0-9]+-.+-RC[0-9]+$")) {
 							GitEnvironment environment = getEnvironment(versions, name);

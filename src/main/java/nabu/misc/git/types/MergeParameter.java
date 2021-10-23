@@ -30,6 +30,8 @@ public class MergeParameter {
 	// this can contain queries to either show or hide the field, depending on other state
 	// note that this should be glue syntax but translateable to javascript as that is the most likely scenario for display
 	private String show, hide;
+	// you can illustrate the default value
+	private String defaultValue;
 
 	public String getName() {
 		return name;
@@ -126,5 +128,11 @@ public class MergeParameter {
 	}
 	public void setHide(String hide) {
 		this.hide = hide;
+	}
+	public String getDefaultValue() {
+		return defaultValue;
+	}
+	public void setDefaultValue(String defaultValue) {
+		this.defaultValue = defaultValue;
 	}
 }
