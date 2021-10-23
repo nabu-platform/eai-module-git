@@ -51,11 +51,6 @@ import org.eclipse.jgit.treewalk.TreeWalk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import be.nabu.eai.module.git.merge.BuildInformation;
-import be.nabu.eai.module.git.merge.MergeEntry;
-import be.nabu.eai.module.git.merge.MergeParameter;
-import be.nabu.eai.module.git.merge.MergeEntry.MergeState;
-import be.nabu.eai.module.git.merge.MergeResult;
 import be.nabu.eai.repository.EAIResourceRepository;
 import be.nabu.glue.api.ExecutionEnvironment;
 import be.nabu.glue.api.Executor;
@@ -83,6 +78,10 @@ import be.nabu.libs.types.java.BeanResolver;
 import be.nabu.utils.io.IOUtils;
 import be.nabu.utils.io.api.ByteBuffer;
 import be.nabu.utils.security.EncryptionXmlAdapter;
+import nabu.misc.git.types.MergeEntry;
+import nabu.misc.git.types.MergeParameter;
+import nabu.misc.git.types.MergeResult;
+import nabu.misc.git.types.MergeEntry.MergeState;
 
 /**
  * GOALS:
@@ -576,6 +575,12 @@ public class GitRepository {
 				GitEnvironment environment = getEnvironment(getVersions(), branch);
 				merge(environment);
 			}
+			// if we have an exception, reset the changes, otherwise we can't switch branches!
+			catch (Exception e) {
+				logger.error("Could not merge result", e);
+				git.reset().call();
+				throw e;
+			}
 			finally {
 				git.checkout().setName(this.branch).call();
 			}
@@ -719,21 +724,12 @@ public class GitRepository {
 			
 			// the merge result is necessary for the merging but is not exposed once we download the end result
 			// the build information is a rather static file, specifically aimed at informing the end-user of which version the resulting zip is
-			// we can also include other data like required references
-			File buildFile = new File(folder, "build.xml");
+			// we can also include other data like required dependencies
 			XMLBinding buildBinding = new XMLBinding((ComplexType) BeanResolver.getInstance().resolve(BuildInformation.class), Charset.forName("UTF-8"));
 			buildBinding.setPrettyPrint(true);
-			BuildInformation build = null;
-			// if we have a file, load it
-			if (buildFile.exists()) {
-				try (InputStream input = new BufferedInputStream(new FileInputStream(buildFile))) {
-					build = TypeUtils.getAsBean(binding.unmarshal(input, new Window[0]), BuildInformation.class);
-				}
-			}
+			File buildFile = new File(folder, "build.xml");
 			// if we don't have a merge result available, create a new one
-			if (build == null) {
-				build = new BuildInformation();
-			}
+			BuildInformation build = new BuildInformation();
 			build.setBuilt(new Date());
 			build.setTag(fullName);
 			build.setRelease(current.getPatch().getRelease().getVersion());
@@ -743,7 +739,7 @@ public class GitRepository {
 			build.setDependencies(calculateDependencies(nodes));
 			// write the merge result
 			try (OutputStream output = new BufferedOutputStream(new FileOutputStream(buildFile))) {
-				binding.marshal(output, new BeanInstance<BuildInformation>(build));
+				buildBinding.marshal(output, new BeanInstance<BuildInformation>(build));
 			}
 			
 			// commit the resulting branch

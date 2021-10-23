@@ -1,10 +1,10 @@
-package be.nabu.eai.module.git.merge;
+package nabu.misc.git.types;
 
 import java.util.Date;
 import java.util.List;
 
-import be.nabu.eai.module.git.merge.MergeEntry.MergeState;
 import be.nabu.libs.types.api.annotation.ComplexTypeDescriptor;
+import nabu.misc.git.types.MergeEntry.MergeState;
 
 @ComplexTypeDescriptor(name = "merge", propOrder = {"entries", "started", "stopped", "state"})
 public class MergeResult {

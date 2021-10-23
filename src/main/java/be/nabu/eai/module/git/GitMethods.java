@@ -10,11 +10,8 @@ import javax.xml.parsers.ParserConfigurationException;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.xml.sax.SAXException;
 
-import be.nabu.eai.module.git.merge.MergeEntry;
-import be.nabu.eai.module.git.merge.MergeResult;
 import be.nabu.glue.annotations.GlueParam;
 import be.nabu.glue.xml.XMLMethods;
-import be.nabu.eai.module.git.merge.MergeParameter;
 import be.nabu.libs.evaluator.annotations.MethodProviderClass;
 import be.nabu.libs.types.BaseTypeInstance;
 import be.nabu.libs.types.CollectionHandlerFactory;
@@ -26,6 +23,9 @@ import be.nabu.libs.types.api.Element;
 import be.nabu.libs.types.api.KeyValuePair;
 import be.nabu.libs.types.java.BeanInstance;
 import be.nabu.libs.types.utils.KeyValuePairImpl;
+import nabu.misc.git.types.MergeEntry;
+import nabu.misc.git.types.MergeParameter;
+import nabu.misc.git.types.MergeResult;
 
 //TODO: document validation: given an XML file and a structure, validate it (to detect configuration problems)
 // in most cases however, the validation rules will be hidden in java code, so needs to be replicated to glue
@@ -76,6 +76,8 @@ public class GitMethods {
 			@GlueParam(name = "optional") Boolean optional,
 			@GlueParam(name = "raw") String raw,
 			@GlueParam(name = "priority") Integer priority,
+			@GlueParam(name = "show") String show,
+			@GlueParam(name = "hide") String hide,
 			// possible values
 			@GlueParam(name = "enumeration") String...values) {
 		if (name == null || name.trim().isEmpty()) {
@@ -142,6 +144,8 @@ public class GitMethods {
 		if (priority != null) {
 			result.setPriority(priority);
 		}
+		result.setShow(show);
+		result.setHide(hide);
 		return result;
 	}
 	

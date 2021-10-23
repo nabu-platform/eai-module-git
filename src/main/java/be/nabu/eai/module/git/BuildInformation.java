@@ -1,8 +1,11 @@
-package be.nabu.eai.module.git.merge;
+package be.nabu.eai.module.git;
 
 import java.util.Date;
 import java.util.List;
 
+import javax.xml.bind.annotation.XmlRootElement;
+
+@XmlRootElement(name = "build")
 public class BuildInformation {
 	private int release, patch, rc;
 	private String environment, tag;

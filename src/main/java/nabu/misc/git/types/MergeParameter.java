@@ -1,4 +1,4 @@
-package be.nabu.eai.module.git.merge;
+package nabu.misc.git.types;
 
 import java.util.List;
 
@@ -27,6 +27,9 @@ public class MergeParameter {
 	private boolean changed;
 	// you can choose that for a particular build, a particular parameter is not relevant
 	private boolean ignore;
+	// this can contain queries to either show or hide the field, depending on other state
+	// note that this should be glue syntax but translateable to javascript as that is the most likely scenario for display
+	private String show, hide;
 
 	public String getName() {
 		return name;
@@ -111,5 +114,17 @@ public class MergeParameter {
 	}
 	public void setIgnore(boolean ignore) {
 		this.ignore = ignore;
+	}
+	public String getShow() {
+		return show;
+	}
+	public void setShow(String show) {
+		this.show = show;
+	}
+	public String getHide() {
+		return hide;
+	}
+	public void setHide(String hide) {
+		this.hide = hide;
 	}
 }

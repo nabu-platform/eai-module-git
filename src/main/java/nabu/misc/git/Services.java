@@ -51,7 +51,6 @@ import be.nabu.eai.module.git.GitInformation;
 import be.nabu.eai.module.git.GitInformations;
 import be.nabu.eai.module.git.GitRelease;
 import be.nabu.eai.module.git.GitRepository;
-import be.nabu.eai.module.git.merge.MergeResult;
 import be.nabu.eai.repository.EAIRepositoryUtils;
 import be.nabu.eai.repository.EAIResourceRepository;
 import be.nabu.eai.repository.api.Entry;
@@ -71,6 +70,7 @@ import be.nabu.libs.types.binding.xml.XMLBinding;
 import be.nabu.libs.types.java.BeanInstance;
 import be.nabu.libs.types.java.BeanResolver;
 import nabu.misc.git.types.GitBuild;
+import nabu.misc.git.types.MergeResult;
 
 // if we are releasing on the same server, we clone the directory of the project itself
 // we can't really cache the git repositories because the nabu server might be clustered (though they should use a shared drive then)
