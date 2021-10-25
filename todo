@@ -1,3 +1,51 @@
-- developer plugins for commit & release
-- web application for building / configuring
+- retrofit deployment endpoint to work with "normal" zips as well that do not have the deployment.xml
+	- have developer be able to push a zip file to an environment!
 - glue scripts for merging
+
+- web application (force storage of all keys?)
+- configuration! force storage of all keys with xsi:nill?
+- datastore
+- oauth2 (though maybe should step away from environment specific variables altogether and force it in web application?
+
+maybe:
+- features?
+- channels (though deprecated as artifact)
+
+# images
+
+images can be built on yet another server or on the same server as the build server
+they can reuse the build git repositories or check them out
+they assume a "build" remote to pull from (in sync with the build remote that is pushed to)
+
+an image contains:
+
+- a nabu profile
+- one or more projects
+	- projects can have a normal scope or a test scope
+	- test scope projects are only included for test environments
+	
+you can create a new instance of an image for the "latest" version
+-> this will simply combine all the latest versions of the packages
+
+each image can have multiple environments, at which point you choose the environment branch that is applicable for each project
+because these names usually match, we can autosuggest them
+
+you can create a new instance of an image, this gets its own version number, apart from the image name (e.g. image "bebat", version 1, 2, ...)
+per linked project, you can choose a specific release/patch or you can just take "latest"
+(the latest will be resolved to whatever the projects are at now, not perpetually latest)
+
+a new json download is performed for the cloud profile at that point and stored, this contains the exact combination of modules & versions that will be tested.
+
+you can download a particular environment, this will be a zip file containing an entire nabu installation & the projects you included
+
+they can also be written to a shared drive with for instance "bebat-<uuid>-v1/qlty"
+other servers can check out this shared drive and use symbolic links to use the correct version
+
+each image can have test cases, they are added at a certain version (so not included in the reports until that version)
+and they can be disabled in a certain version, they will no longer show up in reports after that but will remain for in between reports
+
+these test cases can be manual (default) or automated. in automation cases we register the service id that will run the test
+
+for each version of the image, every available test case should be run
+
+test cases can be bundled into a test project

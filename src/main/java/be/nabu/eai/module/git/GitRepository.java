@@ -627,13 +627,13 @@ public class GitRepository {
 		merge(current, previous);
 	}
 	
-	synchronized public byte[] getAsZip(String branch) {
+	synchronized public byte[] getAsZip(String branch, boolean includeRoot) {
 		try {
 			try {
 				git.checkout().setName(branch).call();
 				ByteBuffer newByteBuffer = IOUtils.newByteBuffer();
 				try (ZipOutputStream zipOutputStream = new ZipOutputStream(new BufferedOutputStream(IOUtils.toOutputStream(newByteBuffer)))) {
-					ResourceUtils.zip(new FileDirectory(null, folder, false), zipOutputStream, true, new Predicate<Resource>() {
+					ResourceUtils.zip(new FileDirectory(null, folder, false), zipOutputStream, includeRoot, new Predicate<Resource>() {
 						@Override
 						public boolean test(Resource t) {
 							if (t.getName().equals("merge-result.xml")) {

@@ -404,9 +404,9 @@ public class Services {
 	}
 	
 	@WebResult(name = "zip")
-	public byte [] zip(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch) {
+	public byte [] zip(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch, @WebParam(name = "includeRoot") Boolean includeRoot) {
 		GitRepository repository = getRepository(name);
-		return repository.getAsZip(branch);
+		return repository.getAsZip(branch, includeRoot != null && includeRoot);
 	}
 	
 	// we can "build" a project
