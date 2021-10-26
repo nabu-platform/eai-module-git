@@ -627,10 +627,12 @@ public class GitRepository {
 		merge(current, previous);
 	}
 	
-	synchronized public byte[] getAsZip(String branch, boolean includeRoot) {
+	// you can specify a certain release candidate on the branch
+	synchronized public byte[] getAsZip(String branch, Integer rc, boolean includeRoot) {
 		try {
 			try {
-				git.checkout().setName(branch).call();
+				// we can checkout the tag rather than the branch?
+				git.checkout().setName(rc == null ? branch : branch + "-RC" + rc).call();
 				ByteBuffer newByteBuffer = IOUtils.newByteBuffer();
 				try (ZipOutputStream zipOutputStream = new ZipOutputStream(new BufferedOutputStream(IOUtils.toOutputStream(newByteBuffer)))) {
 					ResourceUtils.zip(new FileDirectory(null, folder, false), zipOutputStream, includeRoot, new Predicate<Resource>() {
