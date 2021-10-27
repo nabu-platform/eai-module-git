@@ -1,8 +1,12 @@
 package be.nabu.eai.module.git;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.charset.Charset;
+import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
 
 import javax.xml.parsers.ParserConfigurationException;
@@ -11,17 +15,27 @@ import org.eclipse.jgit.revwalk.RevCommit;
 import org.xml.sax.SAXException;
 
 import be.nabu.glue.annotations.GlueParam;
+import be.nabu.glue.core.api.Lambda;
+import be.nabu.glue.core.impl.GlueUtils;
+import be.nabu.glue.core.impl.methods.v2.StringMethods;
+import be.nabu.glue.utils.ScriptRuntime;
 import be.nabu.glue.xml.XMLMethods;
 import be.nabu.libs.evaluator.annotations.MethodProviderClass;
+import be.nabu.libs.property.api.Value;
 import be.nabu.libs.types.BaseTypeInstance;
 import be.nabu.libs.types.CollectionHandlerFactory;
 import be.nabu.libs.types.TypeConverterFactory;
 import be.nabu.libs.types.TypeUtils;
 import be.nabu.libs.types.api.CollectionHandlerProvider;
 import be.nabu.libs.types.api.ComplexContent;
+import be.nabu.libs.types.api.ComplexType;
 import be.nabu.libs.types.api.Element;
 import be.nabu.libs.types.api.KeyValuePair;
-import be.nabu.libs.types.java.BeanInstance;
+import be.nabu.libs.types.api.SimpleType;
+import be.nabu.libs.types.definition.xml.XMLDefinitionUnmarshaller;
+import be.nabu.libs.types.properties.EnvironmentSpecificProperty;
+import be.nabu.libs.types.properties.MinOccursProperty;
+import be.nabu.libs.types.structure.Structure;
 import be.nabu.libs.types.utils.KeyValuePairImpl;
 import nabu.misc.git.types.MergeEntry;
 import nabu.misc.git.types.MergeParameter;
@@ -65,6 +79,60 @@ public class GitMethods {
 			}
 		}
 		return null;
+	}
+	
+	// list all the merge parameters based on the definition (e.g. for config artifacts)
+	// the lambda getter allows you to choose how you resolve them (e.g. get from actual xml, get from key/value list...)
+	public List<MergeParameter> parameters(@GlueParam(name = "definition") String definition, @GlueParam(name = "getter") Lambda getter, @GlueParam(name = "forceAll") Boolean forceAll) throws IOException, ParseException {
+		XMLDefinitionUnmarshaller unmarshaller = new XMLDefinitionUnmarshaller();
+		unmarshaller.setIgnoreUnknown(true);
+		Structure structure = (Structure) unmarshaller.unmarshal(new ByteArrayInputStream(definition.getBytes(Charset.forName("UTF-8"))));
+		List<MergeParameter> parameters = new ArrayList<MergeParameter>();
+		recursiveParameters(structure, null, getter, forceAll, parameters);
+		return parameters;
+	}
+	
+	private void recursiveParameters(ComplexType current, String path, Lambda getter, boolean forceAll, List<MergeParameter> parameters) {
+		for (Element<?> child : TypeUtils.getAllChildren(current)) {
+			String childPath = path == null ? child.getName() : path + "/" + child.getName();
+			Value<Integer> minOccurs = child.getProperty(MinOccursProperty.getInstance());
+			boolean optional = minOccurs != null && minOccurs.getValue() == 0;
+			// if we have a simple type, just add it
+			if (child.getType() instanceof SimpleType) {
+				// must be environment specific
+				Value<Boolean> property = child.getProperty(EnvironmentSpecificProperty.getInstance());
+				if (forceAll || (property != null && property.getValue())) {
+					Object raw = GlueUtils.calculate(getter, ScriptRuntime.getRuntime(), Arrays.asList(childPath));
+					if (child.getType().isList(child.getProperties())) {
+						raw = StringMethods.join(", ", raw);
+					}
+					MergeParameter parameter = parameter(childPath, null, null, null, getType((SimpleType<?>) child.getType()), false, optional, raw == null ? null : raw.toString(), null, null, null, null);
+					if (child.getType().isList(child.getProperties())) {
+						parameter.setList(true);
+					}
+					parameters.add(parameter);
+				}
+			}
+			// we only recurse non list complex types
+			else if (!child.getType().isList(child.getProperties())) {
+				recursiveParameters((ComplexType) child.getType(), childPath, getter, forceAll, parameters);
+			}
+		}
+	}
+	
+	private String getType(SimpleType<?> type) {
+		if (Long.class.isAssignableFrom(type.getInstanceClass()) || Integer.class.isAssignableFrom(type.getInstanceClass()) || Short.class.isAssignableFrom(type.getInstanceClass())) {
+			return "long";
+		}
+		else if (Date.class.isAssignableFrom(type.getInstanceClass())) {
+			return "date";
+		}
+		else if (Boolean.class.isAssignableFrom(type.getInstanceClass())) {
+			return "boolean";
+		}
+		else {
+			return "string";
+		}
 	}
 	
 	public MergeParameter parameter(@GlueParam(name = "name") String name,
@@ -149,10 +217,6 @@ public class GitMethods {
 		result.setShow(show);
 		result.setHide(hide);
 		return result;
-	}
-	
-	public List<MergeParameter> parameters() {
-		return merged().getParameters();
 	}
 	
 	protected MergeEntry previousEntry() {

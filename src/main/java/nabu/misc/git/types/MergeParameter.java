@@ -32,6 +32,8 @@ public class MergeParameter {
 	private String show, hide;
 	// you can illustrate the default value
 	private String defaultValue;
+	// whether or not it is a list
+	private boolean list;
 
 	public String getName() {
 		return name;
@@ -134,5 +136,11 @@ public class MergeParameter {
 	}
 	public void setDefaultValue(String defaultValue) {
 		this.defaultValue = defaultValue;
+	}
+	public boolean isList() {
+		return list;
+	}
+	public void setList(boolean list) {
+		this.list = list;
 	}
 }

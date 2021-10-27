@@ -966,8 +966,9 @@ public class GitRepository {
 	
 	private String getStandardMergeScript(GitNode node, Map<URI, String> resolved) {
 		if (node.getArtifactManager() != null) {
+			URI uri = null;
 			try {
-				URI uri = new URI(URIUtils.encodeURI(standardEndpoint + "/" + node.getArtifactManager() + ".glue"));
+				uri = new URI(URIUtils.encodeURI(standardEndpoint + "/" + node.getArtifactManager() + ".glue"));
 				if (!resolved.containsKey(uri)) {
 					// we first put an empty value, if loading it fails, we assume it does not exist
 					resolved.put(uri, null);
@@ -978,7 +979,11 @@ public class GitRepository {
 				return resolved.get(uri);
 			}
 			catch (Exception e) {
-				e.printStackTrace();
+				logger.warn("Could not find standard merge script for: " + node.getArtifactManager());
+				// explicitly set to null to prevent further shizzle
+				if (uri != null) {
+					resolved.put(uri, null);
+				}
 				return null;
 			}
 		}
