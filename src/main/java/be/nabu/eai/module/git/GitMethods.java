@@ -12,6 +12,8 @@ import java.util.List;
 import javax.xml.parsers.ParserConfigurationException;
 
 import org.eclipse.jgit.revwalk.RevCommit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.xml.sax.SAXException;
 
 import be.nabu.glue.annotations.GlueParam;
@@ -24,6 +26,7 @@ import be.nabu.libs.evaluator.annotations.MethodProviderClass;
 import be.nabu.libs.property.api.Value;
 import be.nabu.libs.types.BaseTypeInstance;
 import be.nabu.libs.types.CollectionHandlerFactory;
+import be.nabu.libs.types.ComplexContentWrapperFactory;
 import be.nabu.libs.types.TypeConverterFactory;
 import be.nabu.libs.types.TypeUtils;
 import be.nabu.libs.types.api.CollectionHandlerProvider;
@@ -47,6 +50,8 @@ import nabu.misc.git.types.MergeResult;
 // TODO: encryption: some fields are encrypted, need encrypt/decrypt logic
 @MethodProviderClass(namespace = "git")
 public class GitMethods {
+	
+	private Logger logger = LoggerFactory.getLogger(getClass());
 	
 	private GitRepository repository;
 	private RevCommit previousCommit;
@@ -84,12 +89,17 @@ public class GitMethods {
 	// list all the merge parameters based on the definition (e.g. for config artifacts)
 	// the lambda getter allows you to choose how you resolve them (e.g. get from actual xml, get from key/value list...)
 	public List<MergeParameter> parameters(@GlueParam(name = "definition") String definition, @GlueParam(name = "getter") Lambda getter, @GlueParam(name = "forceAll") Boolean forceAll) throws IOException, ParseException {
-		XMLDefinitionUnmarshaller unmarshaller = new XMLDefinitionUnmarshaller();
-		unmarshaller.setIgnoreUnknown(true);
-		Structure structure = (Structure) unmarshaller.unmarshal(new ByteArrayInputStream(definition.getBytes(Charset.forName("UTF-8"))));
+		Structure structure = getDefinition(definition);
 		List<MergeParameter> parameters = new ArrayList<MergeParameter>();
 		recursiveParameters(structure, null, getter, forceAll, parameters);
 		return parameters;
+	}
+
+	private Structure getDefinition(String definition) throws IOException, ParseException {
+		XMLDefinitionUnmarshaller unmarshaller = new XMLDefinitionUnmarshaller();
+		unmarshaller.setIgnoreUnknown(true);
+		Structure structure = (Structure) unmarshaller.unmarshal(new ByteArrayInputStream(definition.getBytes(Charset.forName("UTF-8"))));
+		return structure;
 	}
 	
 	private void recursiveParameters(ComplexType current, String path, Lambda getter, boolean forceAll, List<MergeParameter> parameters) {
@@ -103,7 +113,7 @@ public class GitMethods {
 				Value<Boolean> property = child.getProperty(EnvironmentSpecificProperty.getInstance());
 				if (forceAll || (property != null && property.getValue())) {
 					Object raw = GlueUtils.calculate(getter, ScriptRuntime.getRuntime(), Arrays.asList(childPath));
-					if (child.getType().isList(child.getProperties())) {
+					if (child.getType().isList(child.getProperties()) && raw != null) {
 						raw = StringMethods.join(", ", raw);
 					}
 					MergeParameter parameter = parameter(childPath, null, null, null, getType((SimpleType<?>) child.getType()), false, optional, raw == null ? null : raw.toString(), null, null, null, null);
@@ -133,6 +143,48 @@ public class GitMethods {
 		else {
 			return "string";
 		}
+	}
+	
+	// we want key value pairs here, so the property should have a "key" and a "value" field
+	public Object propertiesToObject(@GlueParam(name = "definition") String definition, @GlueParam(name = "properties") Object...properties) throws IOException, ParseException {
+		String separator = "/";
+		Structure structure = getDefinition(definition);
+		ComplexContent newInstance = ((ComplexType) structure).newInstance();
+		if (properties != null) {
+			Iterable<?> series = GlueUtils.toSeries(properties);
+			for (Object property : series) {
+				if (property == null) {
+					continue;
+				}
+				if (!(property instanceof ComplexContent)) {
+					property = ComplexContentWrapperFactory.getInstance().getWrapper().wrap(property);
+				}
+				ComplexContent content = (ComplexContent) property;
+				if (content == null) {
+					logger.error("Could not convert property to complex content: " + property);
+					continue;
+				}
+				String key = content.get("key").toString();
+				if (separator == null || !separator.equals("/")) {
+					key = key.replace(separator == null ? "." : separator, "/");
+				}
+				if (newInstance.getType().get(key) != null) {
+					newInstance.set(key, content.get("value"));
+				}
+			}
+		}
+		return newInstance;
+	}
+	@SuppressWarnings("unchecked")
+	public List<KeyValuePair> objectToProperties(Object object) throws IOException, SAXException, ParserConfigurationException {
+		List<KeyValuePair> properties = new ArrayList<KeyValuePair>();
+		if (object != null) {
+			if (!(object instanceof ComplexContent)) {
+				object = ComplexContentWrapperFactory.getInstance().getWrapper().wrap(object);
+			}
+			toProperties((ComplexContent) object, properties, null, "/");
+		}
+		return properties;
 	}
 	
 	public MergeParameter parameter(@GlueParam(name = "name") String name,
@@ -262,15 +314,6 @@ public class GitMethods {
 	}
 	protected void setCurrentEntryId(String currentEntryId) {
 		this.currentEntryId = currentEntryId;
-	}
-	
-	public List<KeyValuePair> toKeyValue(Object object) throws IOException, SAXException, ParserConfigurationException {
-		List<KeyValuePair> properties = new ArrayList<KeyValuePair>();
-		if (object != null) {
-			ComplexContent content = (ComplexContent) XMLMethods.objectify(object);
-			toProperties(content, properties, null, "/");
-		}
-		return properties;
 	}
 	
 	@SuppressWarnings({ "rawtypes", "unchecked" })
