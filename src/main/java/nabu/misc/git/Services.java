@@ -471,9 +471,17 @@ public class Services {
 	}
 
 	private File getBuildsFolder() {
-		File directory = new File(System.getProperty("git.build", System.getProperty("user.home")));
-		File nabu = new File(directory, ".nabu");
-		File builds = new File(nabu, "builds");
+		String property = System.getProperty("git.build");
+		File builds;
+		// if you don't set an explicit property, we use the home folder
+		if (property == null) {
+			File directory = new File(System.getProperty("user.home"));
+			File nabu = new File(directory, ".nabu");
+			builds = new File(nabu, "builds");
+		}
+		else {
+			builds = new File(property);
+		}
 		if (!builds.exists()) {
 			builds.mkdirs();
 		}
