@@ -771,6 +771,17 @@ public class GitRepository {
 			}
 		}
 		catch (Exception e) {
+			logger.error("Merging failed", e);
+			try {
+				git.reset().call();
+				// checkout the local version
+				git.checkout().setAllPaths(true).call();
+				// switch back to the main branch
+				git.checkout().setName(branch).call();
+			}
+			catch (Exception f) {
+				logger.error("Could not reset the current changes", f);
+			}
 			throw new RuntimeException(e);
 		}
 	}
@@ -914,7 +925,6 @@ public class GitRepository {
 								// nothing
 							}
 						});
-						
 						// run the merge script
 						runtime.run();
 						
@@ -933,13 +943,13 @@ public class GitRepository {
 						merged.setState(MergeState.SUCCEEDED);
 					}
 					catch (Exception e) {
+						logger.error("Could not merge: " + path, e);
 						StringWriter stringWriter = new StringWriter();
 						PrintWriter printer = new PrintWriter(stringWriter);
 						e.printStackTrace(printer);
 						printer.flush();
 						merged.setErrorLog(stringWriter.toString());
 						merged.setState(MergeState.FAILED);
-						logger.error("Could not merge: " + path, e);
 					}
 					// always set the script log, it might help in debugging
 					finally {
@@ -948,6 +958,7 @@ public class GitRepository {
 				}
 			}
 			catch (Exception e) {
+				logger.error("Could not merge: " + path, e);
 				throw new RuntimeException(e);
 			}
 		}

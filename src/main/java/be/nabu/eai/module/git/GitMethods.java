@@ -105,6 +105,7 @@ public class GitMethods {
 	private void recursiveParameters(ComplexType current, String path, Lambda getter, boolean forceAll, List<MergeParameter> parameters) {
 		for (Element<?> child : TypeUtils.getAllChildren(current)) {
 			String childPath = path == null ? child.getName() : path + "/" + child.getName();
+			System.out.println("Scanning path: " + childPath);
 			Value<Integer> minOccurs = child.getProperty(MinOccursProperty.getInstance());
 			boolean optional = minOccurs != null && minOccurs.getValue() == 0;
 			// if we have a simple type, just add it
@@ -160,7 +161,7 @@ public class GitMethods {
 					property = ComplexContentWrapperFactory.getInstance().getWrapper().wrap(property);
 				}
 				ComplexContent content = (ComplexContent) property;
-				if (content == null) {
+				if (content == null || content.get("key") == null) {
 					logger.error("Could not convert property to complex content: " + property);
 					continue;
 				}
@@ -203,6 +204,10 @@ public class GitMethods {
 			@GlueParam(name = "enumeration") String...values) {
 		if (name == null || name.trim().isEmpty()) {
 			throw new IllegalArgumentException("Name is mandatory");
+		}
+		// empty strings are considered the same as null
+		if (raw instanceof String && ((String) raw).isEmpty()) {
+			raw = null;
 		}
 		MergeEntry merged = merged();
 		MergeParameter result = null;

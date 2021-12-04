@@ -333,8 +333,11 @@ public class Services {
 		return repository.getMergeResult(branch);
 	}
 	
-	public void setMergeResult(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch, @WebParam(name = "result") MergeResult result) {
+	public void setMergeResult(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch, @WebParam(name = "result") MergeResult result) throws FileNotFoundException, IOException, ParseException {
 		GitRepository repository = getRepository(name);
+		BasicPrincipal credentials = getCredentials(name, null, null);
+		repository.setUsername(credentials.getName());
+		repository.setPassword(credentials.getPassword());
 		repository.setMergeResult(branch, result);
 	}
 
@@ -481,6 +484,8 @@ public class Services {
 		}
 		else {
 			builds = new File(property);
+			// we want a subfolder because the images are likely right next to this
+			builds = new File(builds, "builds");
 		}
 		if (!builds.exists()) {
 			builds.mkdirs();

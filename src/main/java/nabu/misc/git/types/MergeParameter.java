@@ -143,4 +143,8 @@ public class MergeParameter {
 	public void setList(boolean list) {
 		this.list = list;
 	}
+	@Override
+	public String toString() {
+		return name + "[list:" + list + "]";
+	}
 }
