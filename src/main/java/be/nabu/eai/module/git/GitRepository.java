@@ -45,6 +45,7 @@ import org.eclipse.jgit.lib.ObjectReader;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
+import org.eclipse.jgit.transport.RefSpec;
 import org.eclipse.jgit.transport.RemoteConfig;
 import org.eclipse.jgit.transport.TagOpt;
 import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
@@ -265,6 +266,23 @@ public class GitRepository {
 		int counter = 0;
 		for (GitRelease version : getVersions().descendingSet()) {
 			try {
+				// check if someone added commits to the release branch
+				if (remote != null) {
+					// we need to check out the correct branch before we can do a pull, otherwise it might get merged into the wrong branch
+					git.checkout().setName(version.getBranch()).call();
+					try {
+						// pull the latest data
+						logger.info("Pulling last data for branch '" + version.getBranch() + "' from '" + remote + "'");
+						PullResult call = authenticate(git.pull()).setRemoteBranchName(version.getBranch()).setRemote(remote).call();
+						if (call.getMergeResult().getConflicts() != null && !call.getMergeResult().getConflicts().isEmpty()) {
+							throw new RuntimeException("Merge conflicts detected: " + call);
+						}
+					}
+					finally {
+						git.checkout().setName(branch).call();
+					}
+				}
+				
 				// we can have a new commit on a version, this would result in a new patch version
 				// we check this by comparing the commit date of the last patch with the last commit on this branch
 				RevCommit lastCommitOn = getLastCommitOn(version.getBranch());
@@ -342,7 +360,7 @@ public class GitRepository {
 			if (remote != null) {
 				// pull the latest data, including the tags (we are looking for version tags)
 				logger.info("Pulling last data for branch '" + branch + "' from '" + remote + "'");
-				PullResult call = authenticate(git.pull()).setTagOpt(TagOpt.FETCH_TAGS).setRemote(remote).call();
+				PullResult call = authenticate(git.pull()).setRemoteBranchName(branch).setTagOpt(TagOpt.FETCH_TAGS).setRemote(remote).call();
 				if (call.getMergeResult().getConflicts() != null && !call.getMergeResult().getConflicts().isEmpty()) {
 					throw new RuntimeException("Merge conflicts detected: " + call);
 				}
@@ -397,7 +415,7 @@ public class GitRepository {
 			if (remote != null) {
 				// pull the latest data
 				logger.info("Pulling last data for branch '" + branch + "' from '" + remote + "'");
-				PullResult call = authenticate(git.pull()).setRemote(remote).call();
+				PullResult call = authenticate(git.pull()).setRemoteBranchName(branch).setRemote(remote).call();
 				if (call.getMergeResult().getConflicts() != null && !call.getMergeResult().getConflicts().isEmpty()) {
 					throw new RuntimeException("Merge conflicts detected: " + call);
 				}
@@ -418,6 +436,18 @@ public class GitRepository {
 					// we create the new branch
 					Ref call = git.branchCreate().setName(newBranchName).call();
 					newVersion.setRevCommit(getCommit(call));
+					
+					// we want to upstream the rx branch (if relevant) to allow for easy hotfixing
+					// if you want to hotfix a particular version, on the development server, fetch the r1, r2... branch, switch to that and apply any hotfixes
+					// anything you commit should get picked up
+					if (remote != null) {
+						// pull the latest data
+						RefSpec refSpec = new RefSpec();
+						refSpec.expandFromSource(call);
+						logger.info("Pushing branch '" + newBranchName + "' to '" + remote + "'");
+						authenticate(git.push()).setRefSpecs(refSpec).setRemote(remoteBuild).call();
+					}
+					
 					createPatch(newVersion, 0);
 				}
 			}
