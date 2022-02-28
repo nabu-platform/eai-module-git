@@ -34,11 +34,14 @@ import javax.xml.bind.JAXBContext;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.PullResult;
 import org.eclipse.jgit.api.TransportCommand;
+import org.eclipse.jgit.api.MergeCommand.FastForwardMode;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.api.errors.InvalidRefNameException;
+import org.eclipse.jgit.api.errors.InvalidRemoteException;
 import org.eclipse.jgit.api.errors.NoHeadException;
 import org.eclipse.jgit.api.errors.RefAlreadyExistsException;
 import org.eclipse.jgit.api.errors.RefNotFoundException;
+import org.eclipse.jgit.api.errors.TransportException;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectLoader;
 import org.eclipse.jgit.lib.ObjectReader;
@@ -168,7 +171,7 @@ import nabu.misc.git.types.MergeEntry.MergeState;
  * 
  */
 
-public class GitRepository {
+public class GitRepository implements AutoCloseable {
 	private String branch = "master";
 	// the name of the remote, e.g. "origin"
 	// this is where we fetch the data
@@ -248,6 +251,7 @@ public class GitRepository {
 	
 	// secondary updates are on separate branches, we check the last commits to see if we have for example applied a hotfix, or changed the settings of a particular RC candidate
 	synchronized public void checkForSecondaryUpdates() {
+		logger.info("Checking for hotfix updates for project: " + projectName);
 		// originally the plan was to walk over the last x commits and check which branches they applied to, assuming this would be the fastest way
 		// but git does not keep track of which branch a commit was originally committed on as a commit can be applied to multiple branches, branches can be renamed etc while a commit is immutable
 		// we _can_ ask if a commit was applied to a particular branch, but that would mean looping over commits and for each commit looping over the branches to see if it was committed
@@ -264,16 +268,24 @@ public class GitRepository {
 //		}
 		// so instead we will check all (or only the last x?) releases to see if they saw an update.
 		int counter = 0;
+		Map<String, Ref> remoteMap;
+		try {
+			remoteMap = authenticate(git.lsRemote()).setTags(false).callAsMap();
+		}
+		catch (Exception e) {
+			logger.error("Could not list remote", e);
+			remoteMap = new HashMap<String, Ref>();
+		}
 		for (GitRelease version : getVersions().descendingSet()) {
 			try {
 				// check if someone added commits to the release branch
-				if (remote != null) {
+				if (remote != null && remoteMap.containsKey("refs/heads/" + version.getBranch())) {
 					// we need to check out the correct branch before we can do a pull, otherwise it might get merged into the wrong branch
 					git.checkout().setName(version.getBranch()).call();
 					try {
 						// pull the latest data
 						logger.info("Pulling last data for branch '" + version.getBranch() + "' from '" + remote + "'");
-						PullResult call = authenticate(git.pull()).setRemoteBranchName(version.getBranch()).setRemote(remote).call();
+						PullResult call = authenticate(git.pull()).setFastForward(FastForwardMode.FF_ONLY).setRemoteBranchName(version.getBranch()).setRemote(remote).call();
 						if (call.getMergeResult().getConflicts() != null && !call.getMergeResult().getConflicts().isEmpty()) {
 							throw new RuntimeException("Merge conflicts detected: " + call);
 						}
@@ -281,6 +293,9 @@ public class GitRepository {
 					finally {
 						git.checkout().setName(branch).call();
 					}
+				}
+				else if (remote != null) {
+					logger.warn("Can not pull updates from '" + remote + "' for branch '" + version.getBranch() + "'");
 				}
 				
 				// we can have a new commit on a version, this would result in a new patch version
@@ -352,6 +367,7 @@ public class GitRepository {
 	// the upside is, we only build releases on specific versions, which makes it easy to link the release back to the manual action of "releasing" it
 	// the downside is, you need to explicitly tag to kickstart the process
 	synchronized public void checkForVersionUpdates() {
+		logger.info("Checking for new versions for project: " + projectName);
 		try {
 			// switch to the correct branch
 			git.checkout().setName(branch).call();
@@ -360,7 +376,10 @@ public class GitRepository {
 			if (remote != null) {
 				// pull the latest data, including the tags (we are looking for version tags)
 				logger.info("Pulling last data for branch '" + branch + "' from '" + remote + "'");
-				PullResult call = authenticate(git.pull()).setRemoteBranchName(branch).setTagOpt(TagOpt.FETCH_TAGS).setRemote(remote).call();
+				// unless we specify fast forward mode, a merge commit will always be generated, even if empty
+				// FF tries to do a fast forward if possible, other options are FF_ONLY (don't merge if it can't be forwarded) and NO_FF (always generate commit)
+				// we use FF_ONLY, there should _not_ be local commits on this branch that are not pushed to the core (?)
+				PullResult call = authenticate(git.pull()).setRemoteBranchName(branch).setTagOpt(TagOpt.FETCH_TAGS).setFastForward(FastForwardMode.FF_ONLY).setRemote(remote).call();
 				if (call.getMergeResult().getConflicts() != null && !call.getMergeResult().getConflicts().isEmpty()) {
 					throw new RuntimeException("Merge conflicts detected: " + call);
 				}
@@ -384,8 +403,19 @@ public class GitRepository {
 							logger.info("Found a new version on branch '" + branch + "', creating release '" + newBranchName + "'");
 							getVersions().add(newVersion);
 							// we create the new branch
-							git.branchCreate().setStartPoint(commit).setName(newBranchName).call();
+							Ref call = git.branchCreate().setStartPoint(commit).setName(newBranchName).call();
 							newVersion.setRevCommit(commit);
+							
+							// we want to upstream the rx branch (if relevant) to allow for easy hotfixing
+							// if you want to hotfix a particular version, on the development server, fetch the r1, r2... branch, switch to that and apply any hotfixes
+							// anything you commit should get picked up
+							if (remote != null) {
+								// pull the latest data
+								RefSpec refSpec = new RefSpec("refs/heads/" + newBranchName);
+								logger.info("Pushing branch '" + newBranchName + "' to '" + remote + "'");
+								authenticate(git.push()).setRefSpecs(refSpec).setRemote(remote).call();
+							}
+							
 							createPatch(newVersion, 0);
 						}
 					}
@@ -406,6 +436,7 @@ public class GitRepository {
 	// the potential downside is that it might become hard to validate exactly which commit is being used
 	// the upside is that you don't need to do anything special, just push to the master branch and you are set
 	synchronized public void checkForAnyPrimaryUpdates() {
+		logger.info("Checking for main updates for project: " + projectName);
 		try {
 			// switch to the correct branch
 			git.checkout().setName(branch).call();
@@ -415,7 +446,7 @@ public class GitRepository {
 			if (remote != null) {
 				// pull the latest data
 				logger.info("Pulling last data for branch '" + branch + "' from '" + remote + "'");
-				PullResult call = authenticate(git.pull()).setRemoteBranchName(branch).setRemote(remote).call();
+				PullResult call = authenticate(git.pull()).setFastForward(FastForwardMode.FF_ONLY).setRemoteBranchName(branch).setRemote(remote).call();
 				if (call.getMergeResult().getConflicts() != null && !call.getMergeResult().getConflicts().isEmpty()) {
 					throw new RuntimeException("Merge conflicts detected: " + call);
 				}
@@ -434,18 +465,16 @@ public class GitRepository {
 					
 					getVersions().add(newVersion);
 					// we create the new branch
-					Ref call = git.branchCreate().setName(newBranchName).call();
+					Ref call = git.branchCreate().setName(newBranchName).setStartPoint(lastCommitOn).call();
 					newVersion.setRevCommit(getCommit(call));
 					
 					// we want to upstream the rx branch (if relevant) to allow for easy hotfixing
 					// if you want to hotfix a particular version, on the development server, fetch the r1, r2... branch, switch to that and apply any hotfixes
 					// anything you commit should get picked up
 					if (remote != null) {
-						// pull the latest data
-						RefSpec refSpec = new RefSpec();
-						refSpec.expandFromSource(call);
+						RefSpec refSpec = new RefSpec("refs/heads/" + newBranchName);
 						logger.info("Pushing branch '" + newBranchName + "' to '" + remote + "'");
-						authenticate(git.push()).setRefSpecs(refSpec).setRemote(remoteBuild).call();
+						authenticate(git.push()).setRefSpecs(refSpec).setRemote(remote).call();
 					}
 					
 					createPatch(newVersion, 0);
@@ -1282,5 +1311,10 @@ public class GitRepository {
 
 	public void setPassword(String password) {
 		this.password = password;
+	}
+
+	@Override
+	public void close() throws Exception {
+		git.close();
 	}
 }

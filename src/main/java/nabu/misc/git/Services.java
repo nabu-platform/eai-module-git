@@ -256,12 +256,17 @@ public class Services {
 	}
 	
 	@WebResult(name = "build")
-	public GitBuild buildInformation(@NotNull @WebParam(name = "name") String name) {
+	public GitBuild buildInformation(@NotNull @WebParam(name = "name") String name) throws Exception {
 		GitRepository repository = getRepository(name);
-		GitBuild build = new GitBuild();
-		build.setName(name);
-		build.setReleases(new ArrayList<GitRelease>(repository.getVersions()));
-		return build;
+		try {
+			GitBuild build = new GitBuild();
+			build.setName(name);
+			build.setReleases(new ArrayList<GitRelease>(repository.getVersions()));
+			return build;
+		}
+		finally {
+			repository.close();
+		}
 	}
 	
 	@WebResult(name = "builds")
@@ -328,17 +333,27 @@ public class Services {
 	}
 	
 	@WebResult(name = "result")
-	public MergeResult getMergeResult(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch) throws IOException, ParseException {
+	public MergeResult getMergeResult(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch) throws Exception {
 		GitRepository repository = getRepository(name);
-		return repository.getMergeResult(branch);
+		try {
+			return repository.getMergeResult(branch);
+		}
+		finally {
+			repository.close();
+		}
 	}
 	
-	public void setMergeResult(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch, @WebParam(name = "result") MergeResult result) throws FileNotFoundException, IOException, ParseException {
+	public void setMergeResult(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch, @WebParam(name = "result") MergeResult result) throws Exception {
 		GitRepository repository = getRepository(name);
-		BasicPrincipal credentials = getCredentials(name, null, null);
-		repository.setUsername(credentials.getName());
-		repository.setPassword(credentials.getPassword());
-		repository.setMergeResult(branch, result);
+		try {
+			BasicPrincipal credentials = getCredentials(name, null, null);
+			repository.setUsername(credentials.getName());
+			repository.setPassword(credentials.getPassword());
+			repository.setMergeResult(branch, result);
+		}
+		finally {
+			repository.close();
+		}
 	}
 
 	private GitRepository getRepository(String name) {
@@ -401,15 +416,25 @@ public class Services {
 		saveBuildFile(buildFile);
 	}
 	
-	public void addEnvironment(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "environment") String environment, @WebParam(name = "copyEnvironment") String copyFromOther) {
+	public void addEnvironment(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "environment") String environment, @WebParam(name = "copyEnvironment") String copyFromOther) throws Exception {
 		GitRepository repository = getRepository(name);
-		repository.addEnvironment(environment, copyFromOther);
+		try {
+			repository.addEnvironment(environment, copyFromOther);
+		}
+		finally {
+			repository.close();
+		}
 	}
 	
 	@WebResult(name = "zip")
-	public byte [] zip(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch, @WebParam(name = "releaseCandidate") Integer releaseCandidate, @WebParam(name = "includeRoot") Boolean includeRoot) {
+	public byte [] zip(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch, @WebParam(name = "releaseCandidate") Integer releaseCandidate, @WebParam(name = "includeRoot") Boolean includeRoot) throws Exception {
 		GitRepository repository = getRepository(name);
-		return repository.getAsZip(branch, releaseCandidate, includeRoot != null && includeRoot);
+		try {
+			return repository.getAsZip(branch, releaseCandidate, includeRoot != null && includeRoot);
+		}
+		finally {
+			repository.close();
+		}
 	}
 	
 	// we can "build" a project
@@ -417,7 +442,7 @@ public class Services {
 	// if it exists, it will work from there
 	// if it doesn't exist yet, it will check the repo for a project by that name and start from there.
 	// otherwise, it will throw an exception
-	public void build(@WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws InvalidRemoteException, TransportException, GitAPIException, FileNotFoundException, IOException, ParseException, IllegalStateException, ServiceException, InterruptedException, ExecutionException {
+	public void build(@WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws Exception {
 		BasicPrincipal credentials = getCredentials(name, username, password);
 		name = name.replaceAll("[^\\w]+", "_");
 		File builds = getBuildsFolder();
@@ -442,12 +467,17 @@ public class Services {
 			throw new IllegalArgumentException("There is no build with the name: " + name);
 		}
 		GitRepository repository = new GitRepository(file, name);
-		repository.setUsername(credentials.getName());
-		repository.setPassword(credentials.getPassword());
-		// we'll first check for new version tags
-		repository.checkForVersionUpdates();
-		// then we'll check for secondary updates
-		repository.checkForSecondaryUpdates();
+		try {
+			repository.setUsername(credentials.getName());
+			repository.setPassword(credentials.getPassword());
+			// we'll first check for new version tags
+			repository.checkForVersionUpdates();
+			// then we'll check for secondary updates
+			repository.checkForSecondaryUpdates();
+		}
+		finally {
+			repository.close();
+		}
 	}
 	
 	private BasicPrincipal getCredentials(String name, String username, String password) throws FileNotFoundException, IOException, ParseException {
