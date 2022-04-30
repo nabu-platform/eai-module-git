@@ -52,6 +52,7 @@ import org.slf4j.LoggerFactory;
 import be.nabu.eai.module.deployment.action.DeploymentAction;
 import be.nabu.eai.module.git.GitInformation;
 import be.nabu.eai.module.git.GitInformations;
+import be.nabu.eai.module.git.GitPatch;
 import be.nabu.eai.module.git.GitRelease;
 import be.nabu.eai.module.git.GitRepository;
 import be.nabu.eai.repository.EAIRepositoryUtils;
@@ -508,7 +509,8 @@ public class Services {
 	// if it exists, it will work from there
 	// if it doesn't exist yet, it will check the repo for a project by that name and start from there.
 	// otherwise, it will throw an exception
-	public void build(@WebParam(name = "workspace") String workspace, @WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws Exception {
+	@WebResult(name = "newReleases")
+	public List<GitRelease> build(@WebParam(name = "workspace") String workspace, @WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws Exception {
 		BasicPrincipal credentials = getCredentials(name, username, password);
 		name = name.replaceAll("[^\\w]+", "_");
 		File builds = getWorkspaceFolder(workspace);
@@ -537,9 +539,36 @@ public class Services {
 			repository.setUsername(credentials.getName());
 			repository.setPassword(credentials.getPassword());
 			// we'll first check for new version tags
-			repository.checkForVersionUpdates();
+			return repository.checkForVersionUpdates();
 			// then we'll check for secondary updates
-			repository.checkForSecondaryUpdates();
+			// takes a long time and we almost never use it
+//			repository.checkForSecondaryUpdates();
+		}
+		finally {
+			repository.close();
+		}
+	}
+	
+	@WebResult(name = "newReleases")
+	public List<GitPatch> hotfix(@WebParam(name = "workspace") String workspace, @WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password, @WebParam(name = "version") Integer version) throws Exception {
+		BasicPrincipal credentials = getCredentials(name, username, password);
+		name = name.replaceAll("[^\\w]+", "_");
+		File builds = getWorkspaceFolder(workspace);
+		File file = new File(builds, name);
+		// if we don't find the file, let's check if we can clone it from the current repository
+		if (!file.exists()) {
+			throw new IllegalStateException("Could not find project: " + name);
+		}
+		File git = new File(file, ".git");
+		if (!git.exists()) {
+			throw new IllegalArgumentException("There is no build with the name: " + name);
+		}
+		GitRepository repository = new GitRepository(file, name);
+		try {
+			repository.setUsername(credentials.getName());
+			repository.setPassword(credentials.getPassword());
+			// then we'll check for secondary updates
+			return repository.checkForSecondaryUpdates(version);
 		}
 		finally {
 			repository.close();

@@ -203,7 +203,7 @@ public class GitRepository implements AutoCloseable {
 //		}
 //		gitRepository.addEnvironment("dev", null);
 		gitRepository.checkForAnyPrimaryUpdates();
-		gitRepository.checkForSecondaryUpdates();
+		gitRepository.checkForSecondaryUpdates(null);
 	}
 	
 	public GitRepository(File folder) {
@@ -328,7 +328,8 @@ public class GitRepository implements AutoCloseable {
 	}
 	
 	// secondary updates are on separate branches, we check the last commits to see if we have for example applied a hotfix, or changed the settings of a particular RC candidate
-	synchronized public void checkForSecondaryUpdates() {
+	synchronized public List<GitPatch> checkForSecondaryUpdates(Integer versionToCheck) {
+		List<GitPatch> newPatches = new ArrayList<GitPatch>();
 		logger.info("Checking for hotfix updates for project: " + projectName);
 		// originally the plan was to walk over the last x commits and check which branches they applied to, assuming this would be the fastest way
 		// but git does not keep track of which branch a commit was originally committed on as a commit can be applied to multiple branches, branches can be renamed etc while a commit is immutable
@@ -355,6 +356,9 @@ public class GitRepository implements AutoCloseable {
 			remoteMap = new HashMap<String, Ref>();
 		}
 		for (GitRelease version : getVersions().descendingSet()) {
+			if (versionToCheck != null && version.getVersion() != versionToCheck) {
+				continue;
+			}
 			try {
 				// check if someone added commits to the release branch
 				if (remote != null && remoteMap.containsKey("refs/heads/" + version.getBranch())) {
@@ -386,7 +390,7 @@ public class GitRepository implements AutoCloseable {
 					if (lastPatch == null || GitUtils.getCommitDate(lastCommitOn).after(lastPatch.getDate())) {
 						int patchVersion = lastPatch == null ? 0 : lastPatch.getPatch() + 1;
 						logger.info("Hotfix found for r" + version.getVersion() + ", creating new patch version r" + version.getVersion() + "." + patchVersion);
-						createPatch(version, patchVersion);
+						newPatches.add(createPatch(version, patchVersion));
 					}
 					
 					counter++;
@@ -438,13 +442,16 @@ public class GitRepository implements AutoCloseable {
 				logger.error("Could not scan version r" + version.getVersion(), e);
 			}
 		}
+		return newPatches;
 	}
 	
 	// here we check specifically for version tags in the form of "v1", "v2" etc
 	// there is no concept of a minor version at this point
 	// the upside is, we only build releases on specific versions, which makes it easy to link the release back to the manual action of "releasing" it
 	// the downside is, you need to explicitly tag to kickstart the process
-	synchronized public void checkForVersionUpdates() {
+	synchronized public List<GitRelease> checkForVersionUpdates() {
+		List<GitRelease> newVersions = new ArrayList<GitRelease>();
+		
 		logger.info("Checking for new versions for project: " + projectName);
 		try {
 			// switch to the correct branch
@@ -495,6 +502,8 @@ public class GitRepository implements AutoCloseable {
 							}
 							
 							createPatch(newVersion, 0);
+							
+							newVersions.add(newVersion);
 						}
 					}
 				}
@@ -506,6 +515,7 @@ public class GitRepository implements AutoCloseable {
 		catch (Exception e) {
 			throw new RuntimeException(e);
 		}
+		return newVersions;
 	}
 	
 	// a primary update is any commit on the "master" branch
@@ -513,7 +523,9 @@ public class GitRepository implements AutoCloseable {
 	// this means we could be skipping hundreds of commits, depending on when it is pushed to the master and when this is run
 	// the potential downside is that it might become hard to validate exactly which commit is being used
 	// the upside is that you don't need to do anything special, just push to the master branch and you are set
-	synchronized public void checkForAnyPrimaryUpdates() {
+	synchronized public List<GitRelease> checkForAnyPrimaryUpdates() {
+		List<GitRelease> newVersions = new ArrayList<GitRelease>();
+		
 		logger.info("Checking for main updates for project: " + projectName);
 		try {
 			// switch to the correct branch
@@ -556,12 +568,15 @@ public class GitRepository implements AutoCloseable {
 					}
 					
 					createPatch(newVersion, 0);
+					
+					newVersions.add(newVersion);
 				}
 			}
 		}
 		catch (Exception e) {
 			throw new RuntimeException(e);
 		}
+		return newVersions;
 	}
 
 	synchronized private GitPatch createPatch(GitRelease newVersion, int patchVersion) throws GitAPIException, RefAlreadyExistsException, RefNotFoundException, InvalidRefNameException {
