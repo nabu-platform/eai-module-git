@@ -21,7 +21,6 @@ import be.nabu.glue.core.api.Lambda;
 import be.nabu.glue.core.impl.GlueUtils;
 import be.nabu.glue.core.impl.methods.v2.StringMethods;
 import be.nabu.glue.utils.ScriptRuntime;
-import be.nabu.glue.xml.XMLMethods;
 import be.nabu.libs.evaluator.annotations.MethodProviderClass;
 import be.nabu.libs.property.api.Value;
 import be.nabu.libs.types.BaseTypeInstance;
@@ -35,6 +34,8 @@ import be.nabu.libs.types.api.ComplexType;
 import be.nabu.libs.types.api.Element;
 import be.nabu.libs.types.api.KeyValuePair;
 import be.nabu.libs.types.api.SimpleType;
+import be.nabu.libs.types.binding.api.Window;
+import be.nabu.libs.types.binding.xml.XMLBinding;
 import be.nabu.libs.types.definition.xml.XMLDefinitionUnmarshaller;
 import be.nabu.libs.types.properties.EnvironmentSpecificProperty;
 import be.nabu.libs.types.properties.MinOccursProperty;
@@ -86,12 +87,49 @@ public class GitMethods {
 		return null;
 	}
 	
+	public ComplexContent parseXmlWithDefinition(String xml, String definition) throws IOException, ParseException {
+		Structure structure = getDefinition(definition);
+		XMLBinding xmlBinding = new XMLBinding(structure, Charset.defaultCharset());
+		return xmlBinding.unmarshal(new ByteArrayInputStream(xml.getBytes(Charset.defaultCharset())), new Window[0]);
+	}
+
+	public ComplexContent newInstance(@GlueParam(name = "definition") String definition) throws IOException, ParseException {
+		return getDefinition(definition).newInstance();
+	}
+	
 	// list all the merge parameters based on the definition (e.g. for config artifacts)
 	// the lambda getter allows you to choose how you resolve them (e.g. get from actual xml, get from key/value list...)
-	public List<MergeParameter> parameters(@GlueParam(name = "definition") String definition, @GlueParam(name = "getter") Lambda getter, @GlueParam(name = "forceAll") Boolean forceAll) throws IOException, ParseException {
+	public List<MergeParameter> parameters(@GlueParam(name = "definition") String definition, @GlueParam(name = "getter") Lambda getter, @GlueParam(name = "forceAll") Boolean forceAll, @GlueParam(name = "explode") Boolean explode) throws IOException, ParseException {
 		Structure structure = getDefinition(definition);
 		List<MergeParameter> parameters = new ArrayList<MergeParameter>();
-		recursiveParameters(structure, null, getter, forceAll, parameters);
+		recursiveParameters(structure, null, getter, forceAll != null && forceAll, parameters, explode == null || explode, explode == null || explode);
+		
+		// if we explode arrays, we need to be able to deal with fields being removed or added
+		if (explode == null || explode) {
+			// when adding fields, it means there are parameters in the merge result that are _not_ listed by the recursiveParameters routine in the above
+			// first we build a list of all the paths that occur in the recursive parameters, then we check if there are "new" parameters that match any of those and are not in the resultset
+			// note that once again this limits the logic to entries that have at least one value in raw form
+			List<String> impactedPaths = new ArrayList<String>();
+			for (MergeParameter parameter : parameters) {
+				// remove all array access
+				impactedPaths.add(parameter.getName().replaceAll("\\[[^\\]]\\]", ""));
+			}
+			MergeEntry merged = merged();
+			if (merged != null) {
+				if (merged.getParameters() != null) {
+					for (MergeParameter parameter : merged.getParameters()) {
+						// if the parameter is not in the list yet, check if it should be
+						if (parameters.indexOf(parameter) < 0) {
+							String impactedPath = parameter.getName().replaceAll("\\[[^\\]]\\]", "");
+							// only add it if it is a variant of something already added
+							if (impactedPaths.indexOf(impactedPath) >= 0) {
+								parameters.add(parameter);
+							}
+						}
+					}
+				}
+			}
+		}
 		return parameters;
 	}
 
@@ -102,21 +140,72 @@ public class GitMethods {
 		return structure;
 	}
 	
-	private void recursiveParameters(ComplexType current, String path, Lambda getter, boolean forceAll, List<MergeParameter> parameters) {
+	private void recursiveParameters(ComplexType current, String path, Lambda getter, boolean forceAll, List<MergeParameter> parameters, boolean explodeComplex, boolean explodeSimple) {
 		for (Element<?> child : TypeUtils.getAllChildren(current)) {
 			String childPath = path == null ? child.getName() : path + "/" + child.getName();
+			Object raw = GlueUtils.calculate(getter, ScriptRuntime.getRuntime(), Arrays.asList(childPath));
+			
 			Value<Integer> minOccurs = child.getProperty(MinOccursProperty.getInstance());
 			boolean optional = minOccurs != null && minOccurs.getValue() == 0;
+			// if we want to explode and we have a list, explode it
+			if (child.getType().isList(child.getProperties()) && ((explodeComplex && child.getType() instanceof ComplexType) || (explodeSimple && child.getType() instanceof SimpleType))) {
+				// this means you can currently only edit the list/properties if they have _some_ value in dev
+				if (raw != null) {
+					CollectionHandlerProvider collectionHandler = CollectionHandlerFactory.getInstance().getHandler().getHandler(raw.getClass());
+					// very likely we didn't parse it as a list because there is only a single element in it, pretty big assumption...should refactor all this at some point to take the model into account
+					if (collectionHandler == null) {
+						raw = new ArrayList(Arrays.asList(raw));
+						collectionHandler = CollectionHandlerFactory.getInstance().getHandler().getHandler(raw.getClass());
+					}
+					if (collectionHandler != null) {
+						if (child.getType() instanceof SimpleType) {
+							System.out.println("found list of simple types: " + raw);
+							// a simple type must be environment specific, otherwise it won't get added
+							Value<Boolean> property = child.getProperty(EnvironmentSpecificProperty.getInstance());
+							if (forceAll || (property != null && property.getValue())) {
+								for (java.lang.Object index : collectionHandler.getIndexes(raw)) {
+									String singlePath = childPath;
+									if (index instanceof Number) {
+										singlePath += "[" + index + "]";
+									}
+									else {
+										singlePath += "[\"" + index + "\"]";
+									}
+									Object childRaw = collectionHandler.get(raw, index);
+									System.out.println("\tadding as parameter '" + singlePath + "' = " + childRaw);
+									parameters.add(parameter(singlePath, null, null, null, getType((SimpleType<?>) child.getType()), false, optional, childRaw == null ? null : childRaw.toString(), null, null, null, null));
+								}
+							}
+						}
+						// for the complex types, we always dig deeper, whether or not the complex type itself is environment specific or not
+						else {
+							for (java.lang.Object index : collectionHandler.getIndexes(raw)) {
+								String singlePath = childPath;
+								if (index instanceof Number) {
+									singlePath += "[" + index + "]";
+								}
+								else {
+									singlePath += "[\"" + index + "\"]";
+								}
+								Object childRaw = collectionHandler.get(raw, index);
+								if (childRaw != null) {
+									recursiveParameters((ComplexType) child.getType(), singlePath, getter, forceAll, parameters, explodeComplex, explodeSimple);
+								}
+							}
+						}
+					}
+				}
+			}
 			// if we have a simple type, just add it
-			if (child.getType() instanceof SimpleType) {
+			else if (child.getType() instanceof SimpleType) {
 				// must be environment specific
 				Value<Boolean> property = child.getProperty(EnvironmentSpecificProperty.getInstance());
 				if (forceAll || (property != null && property.getValue())) {
-					Object raw = GlueUtils.calculate(getter, ScriptRuntime.getRuntime(), Arrays.asList(childPath));
 					if (child.getType().isList(child.getProperties()) && raw != null) {
 						raw = StringMethods.join(", ", raw);
 					}
 					MergeParameter parameter = parameter(childPath, null, null, null, getType((SimpleType<?>) child.getType()), false, optional, raw == null ? null : raw.toString(), null, null, null, null);
+					// if we are not exploding and have a list, set it
 					if (child.getType().isList(child.getProperties())) {
 						parameter.setList(true);
 					}
@@ -125,7 +214,7 @@ public class GitMethods {
 			}
 			// we only recurse non list complex types
 			else if (!child.getType().isList(child.getProperties())) {
-				recursiveParameters((ComplexType) child.getType(), childPath, getter, forceAll, parameters);
+				recursiveParameters((ComplexType) child.getType(), childPath, getter, forceAll, parameters, explodeComplex, explodeSimple);
 			}
 		}
 	}

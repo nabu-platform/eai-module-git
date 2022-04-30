@@ -4,7 +4,7 @@ public class GitInformation {
 	// authentication
 	private String username, password;
 	// name & description of the project
-	private String name, description;
+	private String workspace, name, description;
 	public String getUsername() {
 		return username;
 	}
@@ -28,5 +28,11 @@ public class GitInformation {
 	}
 	public void setDescription(String description) {
 		this.description = description;
+	}
+	public String getWorkspace() {
+		return workspace;
+	}
+	public void setWorkspace(String workspace) {
+		this.workspace = workspace;
 	}
 }

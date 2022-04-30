@@ -39,6 +39,9 @@ import org.eclipse.jgit.api.errors.ServiceUnavailableException;
 import org.eclipse.jgit.api.errors.TransportException;
 import org.eclipse.jgit.api.errors.UnmergedPathsException;
 import org.eclipse.jgit.api.errors.WrongRepositoryStateException;
+import org.eclipse.jgit.errors.AmbiguousObjectException;
+import org.eclipse.jgit.errors.IncorrectObjectTypeException;
+import org.eclipse.jgit.errors.RevisionSyntaxException;
 import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.transport.RemoteConfig;
@@ -95,6 +98,9 @@ public class Services {
 	private static String masterBranch = System.getProperty("git.master", "master");
 	private static String devBranch = System.getProperty("git.dev", "develop");
 	private static String remote = System.getProperty("git.remote", "origin");
+	private static Boolean prezip = Boolean.parseBoolean(System.getProperty("git.prezip", "true"));
+	
+	private static String DEFAULT_WORKSPACE = "default";
 
 	private Logger logger = LoggerFactory.getLogger(getClass());
 	
@@ -184,7 +190,7 @@ public class Services {
 		git.commit()
 			.setAll(true)
 			.setCommitter(new PersonIdent(token == null ? "anonymous" : token.getName(), token == null ? "$anonymous" : token.getName()))
-			.setMessage(message == null ? "No message" : message)
+			.setMessage(message == null ? "[AUTO] No message" : message)
 			.call();
 		
 		if (push) {
@@ -223,7 +229,7 @@ public class Services {
 		BasicPrincipal credentials = getCredentials(id, username, password);
 		
 		// first we run a commit cycle, we don't push yet, we first want to tag
-		Git git = commitInternal(id, "Commit for release", false, credentials.getName(), credentials.getPassword());
+		Git git = commitInternal(id, "[AUTO] Commit for release", false, credentials.getName(), credentials.getPassword());
 		
 		// then we tag it
 		// first we check what the highest version was that we tagged before
@@ -256,8 +262,8 @@ public class Services {
 	}
 	
 	@WebResult(name = "build")
-	public GitBuild buildInformation(@NotNull @WebParam(name = "name") String name) throws Exception {
-		GitRepository repository = getRepository(name);
+	public GitBuild buildInformation(@WebParam(name = "workspace") String workspace, @NotNull @WebParam(name = "name") String name) throws Exception {
+		GitRepository repository = getRepository(workspace, name);
 		try {
 			GitBuild build = new GitBuild();
 			build.setName(name);
@@ -272,32 +278,64 @@ public class Services {
 	@WebResult(name = "builds")
 	public List<GitInformation> builds() throws FileNotFoundException, IOException, ParseException {
 		GitInformations buildFile = getBuildFile();
-		List<String> names = new ArrayList<String>();
 		File buildsFolder = getBuildsFolder();
+		List<GitInformation> builds = new ArrayList<GitInformation>();
 		if (buildsFolder.exists()) {
+			// workspaces!
 			for (File child : buildsFolder.listFiles()) {
 				if (child.isDirectory()) {
-					names.add(child.getName());
+					List<String> names = new ArrayList<String>();
+					for (File project : child.listFiles()) {
+						if (project.isDirectory()) {
+							names.add(project.getName());
+						}
+					}
+					boolean changed = false;
+					for (GitInformation single : buildFile.getRepositories()) {
+						// if the workspace is empty, for backwards compatibility (before workspaces)
+						if (names.contains(single.getName()) && (single.getWorkspace() == null || single.getWorkspace().equals(child.getName()))) {
+							builds.add(single);
+							// just in case it wasn't filled in yet...
+							if (single.getWorkspace() == null || !single.getWorkspace().equals(child.getName())) {
+								single.setWorkspace(child.getName());
+								changed = true;
+							}
+							names.remove(single.getName());
+						}
+					}
+					if (!names.isEmpty()) {
+						for (String missing : names) {
+							GitInformation information = new GitInformation();
+							information.setName(missing);
+							information.setWorkspace(child.getName());
+							buildFile.getRepositories().add(information);
+							builds.add(information);
+							changed = true;
+						}
+					}
+					if (changed) {
+						saveBuildFile(buildFile);
+					}
 				}
 			}
 		}
-		List<GitInformation> builds = new ArrayList<GitInformation>();
-		for (GitInformation single : buildFile.getRepositories()) {
-			if (names.contains(single.getName())) {
-				builds.add(single);
-				names.remove(single.getName());
-			}
-		}
-		if (!names.isEmpty()) {
-			for (String missing : names) {
-				GitInformation information = new GitInformation();
-				information.setName(missing);
-				buildFile.getRepositories().add(information);
-				builds.add(information);
-			}
-			saveBuildFile(buildFile);
-		}
 		return builds;
+	}
+	
+	public void createWorkspace(@NotNull @WebParam(name = "name") String name) {
+		getWorkspaceFolder(name);
+	}
+	
+	@WebResult(name = "workspaces")
+	public List<String> workspaces() {
+		List<String> workspaces = new ArrayList<String>();
+		File buildsFolder = getBuildsFolder();
+		for (File child : buildsFolder.listFiles()) {
+			if (child.isDirectory()) {
+				workspaces.add(child.getName());
+			}
+		}
+		return workspaces;
 	}
 	
 	@WebResult(name = "projects")
@@ -333,8 +371,8 @@ public class Services {
 	}
 	
 	@WebResult(name = "result")
-	public MergeResult getMergeResult(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch) throws Exception {
-		GitRepository repository = getRepository(name);
+	public MergeResult getMergeResult(@WebParam(name = "workspace") String workspace, @NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch) throws Exception {
+		GitRepository repository = getRepository(workspace, name);
 		try {
 			return repository.getMergeResult(branch);
 		}
@@ -343,8 +381,8 @@ public class Services {
 		}
 	}
 	
-	public void setMergeResult(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch, @WebParam(name = "result") MergeResult result) throws Exception {
-		GitRepository repository = getRepository(name);
+	public void setMergeResult(@WebParam(name = "workspace") String workspace, @NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch, @WebParam(name = "result") MergeResult result) throws Exception {
+		GitRepository repository = getRepository(workspace, name);
 		try {
 			BasicPrincipal credentials = getCredentials(name, null, null);
 			repository.setUsername(credentials.getName());
@@ -356,15 +394,18 @@ public class Services {
 		}
 	}
 
-	private GitRepository getRepository(String name) {
+	private GitRepository getRepository(String workspace, String name) {
 		name = name.replaceAll("[^\\w]+", "_");
-		File builds = getBuildsFolder();
+		File builds = getWorkspaceFolder(workspace);
 		File file = new File(builds, name);
 		File git = new File(file, ".git");
 		if (!git.exists()) {
 			throw new IllegalArgumentException("There is no build with the name: " + name);
 		}
 		GitRepository repository = new GitRepository(file, name);
+		if (prezip) {
+			repository.setZipFolder(getZipFolder(workspace, name));
+		}
 		return repository;
 	}
 	
@@ -398,6 +439,9 @@ public class Services {
 	
 	public void configure(@NotNull @WebParam(name = "configuration") GitInformation configuration) throws FileNotFoundException, IOException, ParseException {
 		GitInformations buildFile = getBuildFile();
+		if (configuration == null || configuration.getName() == null) {
+			return;
+		}
 		GitInformation information = null;
 		for (GitInformation possible : buildFile.getRepositories()) {
 			if (possible.getName().equals(configuration.getName())) {
@@ -407,7 +451,13 @@ public class Services {
 		}
 		if (information == null) {
 			information = new GitInformation();
-			information.setName(configuration.getName());
+			String name = configuration.getName();
+			name = name.replaceAll("[^\\w]+", "_");
+			// can not be updated after the fact
+			information.setName(name);
+			String workspace = configuration.getWorkspace() == null ? DEFAULT_WORKSPACE : configuration.getWorkspace();
+			workspace = workspace.replaceAll("[^\\w]+", "_");
+			information.setWorkspace(workspace);
 			buildFile.getRepositories().add(information);
 		}
 		information.setUsername(configuration.getUsername());
@@ -416,8 +466,24 @@ public class Services {
 		saveBuildFile(buildFile);
 	}
 	
-	public void addEnvironment(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "environment") String environment, @WebParam(name = "copyEnvironment") String copyFromOther) throws Exception {
-		GitRepository repository = getRepository(name);
+	@WebResult(name = "environments")
+	public List<String> environments(@WebParam(name = "workspace") String workspace, @NotNull @WebParam(name = "name") String name, @WebParam(name = "release") Integer release, @WebParam(name = "patch") Integer patch) throws Exception {
+		GitRepository repository = getRepository(workspace, name);
+		try {
+			if (release != null && patch != null) {
+				return repository.getEnvironments(release, patch);
+			}
+			else {
+				return repository.getCurrentEnvironments();
+			}
+		}
+		finally {
+			repository.close();
+		}
+	}
+	
+	public void addEnvironment(@WebParam(name = "workspace") String workspace, @NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "environment") String environment, @WebParam(name = "copyEnvironment") String copyFromOther) throws Exception {
+		GitRepository repository = getRepository(workspace, name);
 		try {
 			repository.addEnvironment(environment, copyFromOther);
 		}
@@ -427,8 +493,8 @@ public class Services {
 	}
 	
 	@WebResult(name = "zip")
-	public byte [] zip(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch, @WebParam(name = "releaseCandidate") Integer releaseCandidate, @WebParam(name = "includeRoot") Boolean includeRoot) throws Exception {
-		GitRepository repository = getRepository(name);
+	public byte [] zip(@WebParam(name = "workspace") String workspace, @NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "branch") String branch, @WebParam(name = "releaseCandidate") Integer releaseCandidate, @WebParam(name = "includeRoot") Boolean includeRoot) throws Exception {
+		GitRepository repository = getRepository(workspace, name);
 		try {
 			return repository.getAsZip(branch, releaseCandidate, includeRoot != null && includeRoot);
 		}
@@ -442,10 +508,10 @@ public class Services {
 	// if it exists, it will work from there
 	// if it doesn't exist yet, it will check the repo for a project by that name and start from there.
 	// otherwise, it will throw an exception
-	public void build(@WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws Exception {
+	public void build(@WebParam(name = "workspace") String workspace, @WebParam(name = "name") String name, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws Exception {
 		BasicPrincipal credentials = getCredentials(name, username, password);
 		name = name.replaceAll("[^\\w]+", "_");
-		File builds = getBuildsFolder();
+		File builds = getWorkspaceFolder(workspace);
 		File file = new File(builds, name);
 		// if we don't find the file, let's check if we can clone it from the current repository
 		if (!file.exists()) {
@@ -458,7 +524,7 @@ public class Services {
 					if (!new File(project, ".git").exists()) {
 						release(name, "Release for first build", username, password);
 					}
-					clone(name, project.toURI(), credentials.getName(), credentials.getPassword());
+					clone(workspace, name, project.toURI(), credentials.getName(), credentials.getPassword());
 				}
 			}
 		}
@@ -497,12 +563,25 @@ public class Services {
 		return new BasicPrincipalImpl();
 	}
 	
-	public void clone(@NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "endpoint") URI uri, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws InvalidRemoteException, TransportException, GitAPIException {
+	public void clone(@WebParam(name = "workspace") String workspace, @NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "endpoint") URI uri, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws InvalidRemoteException, TransportException, GitAPIException {
 		name = name.replaceAll("[^\\w]+", "_");
-		File builds = getBuildsFolder();
+		File builds = getWorkspaceFolder(workspace);
 		authenticate(Git.cloneRepository().setURI(uri.toASCIIString()), username, password).setDirectory(new File(builds, name)).call();
 	}
 
+	private File getWorkspaceFolder(String workspace) {
+		File builds = getBuildsFolder();
+		if (workspace == null) {
+			workspace = DEFAULT_WORKSPACE;
+		}
+		workspace = workspace.replaceAll("[^\\w]+", "_");
+		builds = new File(builds, workspace);
+		if (!builds.exists()) {
+			builds.mkdirs();
+		}
+		return builds;
+	}
+	
 	private File getBuildsFolder() {
 		String property = System.getProperty("git.build");
 		File builds;
@@ -521,5 +600,31 @@ public class Services {
 			builds.mkdirs();
 		}
 		return builds;
+	}
+	
+	private File getZipFolder(String workspace, String project) {
+		String property = System.getProperty("git.build");
+		File builds;
+		// if you don't set an explicit property, we use the home folder
+		if (property == null) {
+			File directory = new File(System.getProperty("user.home"));
+			File nabu = new File(directory, ".nabu");
+			builds = new File(nabu, "zips");
+		}
+		else {
+			builds = new File(property);
+			// we want a subfolder because the images are likely right next to this
+			builds = new File(builds, "zips");
+		}
+		builds = new File(builds, workspace == null ? DEFAULT_WORKSPACE : workspace);
+		builds = new File(builds, project);
+		if (!builds.exists()) {
+			builds.mkdirs();
+		}
+		return builds;
+	}
+	
+	public List<String> getReleaseNotes(@WebParam(name = "workspace") String workspace, @NotNull @WebParam(name = "name") String name, @NotNull @WebParam(name = "version") Integer version) throws RevisionSyntaxException, AmbiguousObjectException, IncorrectObjectTypeException, NoHeadException, IOException, GitAPIException {
+		return version == null ? null : getRepository(workspace, name).getReleaseNotes(version, 0);
 	}
 }

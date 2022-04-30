@@ -42,6 +42,9 @@ import org.eclipse.jgit.api.errors.NoHeadException;
 import org.eclipse.jgit.api.errors.RefAlreadyExistsException;
 import org.eclipse.jgit.api.errors.RefNotFoundException;
 import org.eclipse.jgit.api.errors.TransportException;
+import org.eclipse.jgit.errors.AmbiguousObjectException;
+import org.eclipse.jgit.errors.IncorrectObjectTypeException;
+import org.eclipse.jgit.errors.RevisionSyntaxException;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectLoader;
 import org.eclipse.jgit.lib.ObjectReader;
@@ -189,6 +192,8 @@ public class GitRepository implements AutoCloseable {
 	private File folder;
 	private String projectName;
 	private String username, password;
+	// where to store zipped results for fast access
+	private File zipFolder;
 	
 	public static void main(String...args) throws IOException, NoHeadException, GitAPIException {
 		GitRepository gitRepository = new GitRepository(new File("/home/alex/.nabu/repositories/local-test/test"));
@@ -227,6 +232,25 @@ public class GitRepository implements AutoCloseable {
 		}
 	}
 	
+	public List<String> getCurrentEnvironments() {
+		GitRelease lastVersion = getLastVersion();
+		GitPatch patchVersion = lastVersion.getLastPatch();
+		List<String> environments = new ArrayList<String>();
+		for (GitEnvironment environment : patchVersion.getEnvironments()) {
+			environments.add(environment.getName());
+		}
+		return environments;
+	}
+	
+	public List<String> getEnvironments(int release, int patch) {
+		List<String> environments = new ArrayList<String>();
+		GitPatch patchVersion = getPatchVersion(getVersions(), "r" + release + "." + patch);
+		for (GitEnvironment environment : patchVersion.getEnvironments()) {
+			environments.add(environment.getName());
+		}
+		return environments;
+	}
+	
 	public void addEnvironment(String name, String copyFromOther) {
 		GitPatch lastPatch = getLastVersion().getLastPatch();
 		GitEnvironment originalEnvironment = null;
@@ -247,6 +271,60 @@ public class GitRepository implements AutoCloseable {
 			command.setCredentialsProvider(new UsernamePasswordCredentialsProvider(username, password));
 		}
 		return command;
+	}
+	
+	public List<String> getReleaseNotes(int release, int patch) throws RevisionSyntaxException, AmbiguousObjectException, IncorrectObjectTypeException, IOException, NoHeadException, GitAPIException {
+		List<String> logs = new ArrayList<String>();
+		Iterable<RevCommit> commits = null;
+		Date until = null;
+		Ref toRef = getTag("v" + release);
+		Ref toPeel = git.getRepository().getRefDatabase().peel(toRef);
+		
+		// first release starts from the beginning
+		if (release == 1) {
+			// we get the full branch that we are listening on, we want all the changes until our first version
+			Ref fullBranch = getBranch(branch);
+//			RevCommit parseCommit = new RevWalk(git.getRepository()).parseCommit(releaseBranch.getPeeledObjectId());
+//			ObjectId to = git.getRepository().resolve("refs/tags/v" + release);
+//			Ref fromPeel = git.getRepository().getRefDatabase().peel(fullBranch);
+
+			// we ask for all the commits on a branch
+			// however, they are not sorted according to date!
+			// so we need a date to filter out the messages we care about
+			commits = git.log().add(fullBranch.getObjectId()).call();
+			
+			until = GitUtils.getCommitDate(getCommit(toPeel));
+			// and make sure we stop when we reach our version
+//			toId = toPeel.getPeeledObjectId();
+			
+		}
+		else {
+			// this only works for non-annotated tags, annotated tags have to be "peeled" into their respective commit
+//			ObjectId from = git.getRepository().resolve("refs/tags/v" + (release - 1));
+//			ObjectId to = git.getRepository().resolve("refs/tags/v" + release);
+//			commits = git.log().addRange(from, to).call();
+			
+			Ref fromRef = getTag("v" + (release - 1));
+			Ref fromPeel = git.getRepository().getRefDatabase().peel(fromRef);
+			
+			commits = git.log().addRange(fromPeel.getPeeledObjectId(), toPeel.getPeeledObjectId()).call();
+		}
+		if (commits != null) {
+			for (RevCommit commit : commits) {
+				Date commitDate = GitUtils.getCommitDate(commit);
+				if (until == null || !commitDate.after(until)) {
+					String message = commit.getFullMessage();
+					if (message == null) {
+						message = commit.getShortMessage();
+					}
+					// we add the auto tag when the user does not add anything
+					if (message != null && !message.startsWith("[AUTO] ")) {
+						logs.add(message);
+					}
+				}
+			}
+		}
+		return logs;
 	}
 	
 	// secondary updates are on separate branches, we check the last commits to see if we have for example applied a hotfix, or changed the settings of a particular RC candidate
@@ -690,6 +768,27 @@ public class GitRepository implements AutoCloseable {
 	synchronized public byte[] getAsZip(String branch, Integer rc, boolean includeRoot) {
 		try {
 			try {
+				File zipFile = null;
+				
+				if (zipFolder != null) {
+					String fullName = branch + "-RC";
+					// if no rc is provided, we want the latest
+					if (rc == null) {
+						GitEnvironment environment = getEnvironment(getVersions(), branch);
+						GitReleaseCandidate lastReleaseCandidate = environment.getLastReleaseCandidate();
+						fullName += lastReleaseCandidate.getCandidate();
+					}
+					else {
+						fullName += rc;
+					}
+					zipFile = new File(zipFolder, fullName + ".zip");
+					if (zipFile.exists()) {
+						try (InputStream input = new BufferedInputStream(new FileInputStream(zipFile))) {
+							return IOUtils.toBytes(IOUtils.wrap(input));
+						}
+					}
+				}
+				
 				// we can checkout the tag rather than the branch?
 				git.checkout().setName(rc == null ? branch : branch + "-RC" + rc).call();
 				ByteBuffer newByteBuffer = IOUtils.newByteBuffer();
@@ -704,7 +803,14 @@ public class GitRepository implements AutoCloseable {
 						}
 					});
 				}
-				return IOUtils.toBytes(newByteBuffer);
+				byte[] bytes = IOUtils.toBytes(newByteBuffer);
+				// if we have the zip file target but no content yet, store it for future use
+				if (zipFile != null) {
+					try (OutputStream output = new BufferedOutputStream(new FileOutputStream(zipFile))) {
+						output.write(bytes);
+					}
+				}
+				return bytes;
 			}
 			finally {
 				git.checkout().setName(this.branch).call();
@@ -817,6 +923,23 @@ public class GitRepository implements AutoCloseable {
 			rc.setRevCommit(getCommit(call));
 			current.getReleaseCandidates().add(rc);
 			logger.info("Created release candidate '" + fullName + "'");
+			
+			if (zipFolder != null) {
+				File targetZip = new File(zipFolder, fullName + ".zip");
+				try (ZipOutputStream zipOutputStream = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(targetZip)))) {
+					ResourceUtils.zip(new FileDirectory(null, folder, false), zipOutputStream, false, new Predicate<Resource>() {
+						@Override
+						public boolean test(Resource t) {
+							if (t.getName().equals("merge-result.xml")) {
+								return false;
+							}
+							return true;
+						}
+					});
+				}
+				logger.info("Created zip '" + targetZip + "'");
+			}
+			
 			// switch back to the main branch
 			git.checkout().setName(branch).call();
 			
@@ -1278,6 +1401,18 @@ public class GitRepository implements AutoCloseable {
 		}
 	}
 	
+	private Ref getBranch(String name) {
+		for (Ref ref : getBranches()) {
+			String branchName = ref.getName();
+			// e.g. refs/heads/master
+			branchName = branchName.replaceAll("^.*/", "");
+			if (branchName.equals(name)) {
+				return ref;
+			}
+		}
+		return null;
+	}
+	
 	private List<Ref> getBranches() {
 		try {
 			return git.branchList().call();
@@ -1285,6 +1420,16 @@ public class GitRepository implements AutoCloseable {
 		catch (Exception e) {
 			throw new RuntimeException(e);
 		}
+	}
+	
+	private Ref getTag(String name) {
+		for (Ref tag : getTags()) {
+			String tagName = tag.getName().replaceAll("^.*/([^/]+$)", "$1");
+			if (tagName.equals(name)) {
+				return tag;
+			}
+		}
+		return null;
 	}
 	
 	private List<Ref> getTags() {
@@ -1317,4 +1462,13 @@ public class GitRepository implements AutoCloseable {
 	public void close() throws Exception {
 		git.close();
 	}
+
+	public File getZipFolder() {
+		return zipFolder;
+	}
+
+	public void setZipFolder(File zipFolder) {
+		this.zipFolder = zipFolder;
+	}
+	
 }
