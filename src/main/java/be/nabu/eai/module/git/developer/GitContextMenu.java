@@ -16,6 +16,8 @@ import be.nabu.eai.repository.EAIResourceRepository;
 import be.nabu.eai.repository.api.Entry;
 import be.nabu.eai.repository.api.ResourceEntry;
 import be.nabu.eai.repository.util.SystemPrincipal;
+import be.nabu.libs.authentication.api.Token;
+import be.nabu.libs.authentication.impl.BasicPrincipalImpl;
 import be.nabu.libs.services.api.Service;
 import be.nabu.libs.services.api.ServiceResult;
 import be.nabu.libs.types.api.ComplexContent;
@@ -29,8 +31,14 @@ public class GitContextMenu implements EntryContextMenuProvider {
 	@Override
 	public MenuItem getContext(Entry entry) {
 		Menu menu = new Menu("Versioning");
+		menu.setGraphic(MainController.getInstance().loadFixedSizeGraphic("git/git.png"));
 		if (entry instanceof ResourceEntry) {
 			MenuItem commit = new MenuItem("Commit");
+			commit.setGraphic(MainController.getInstance().loadFixedSizeGraphic("git/git-commit.png"));
+			
+			final Token token = MainController.getInstance().getProfile().getUsername() == null 
+				? SystemPrincipal.ROOT
+				: new BasicPrincipalImpl(MainController.getInstance().getProfile().getUsername(), MainController.getInstance().getProfile().getPassword(), "developer");
 			
 			commit.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
 				@Override
@@ -47,7 +55,7 @@ public class GitContextMenu implements EntryContextMenuProvider {
 									ComplexContent input = service.getServiceInterface().getInputDefinition().newInstance();
 									input.set("id", entry.getId());
 									input.set("message", message);
-									Future<ServiceResult> run = EAIResourceRepository.getInstance().getServiceRunner().run(service, EAIResourceRepository.getInstance().newExecutionContext(SystemPrincipal.ROOT), input);
+									Future<ServiceResult> run = EAIResourceRepository.getInstance().getServiceRunner().run(service, EAIResourceRepository.getInstance().newExecutionContext(token), input);
 									ServiceResult serviceResult = run.get();
 									if (serviceResult.getException() != null) {
 										MainController.getInstance().notify(serviceResult.getException());
@@ -68,6 +76,7 @@ public class GitContextMenu implements EntryContextMenuProvider {
 			menu.getItems().add(commit);
 			if (EAIRepositoryUtils.isProject(entry)) {
 				MenuItem release = new MenuItem("Release");
+				release.setGraphic(MainController.getInstance().loadFixedSizeGraphic("git/git-release.png"));
 				release.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
 					@Override
 					public void handle(ActionEvent arg0) {
@@ -83,7 +92,7 @@ public class GitContextMenu implements EntryContextMenuProvider {
 										ComplexContent input = service.getServiceInterface().getInputDefinition().newInstance();
 										input.set("id", entry.getId());
 										input.set("message", message);
-										Future<ServiceResult> run = EAIResourceRepository.getInstance().getServiceRunner().run(service, EAIResourceRepository.getInstance().newExecutionContext(SystemPrincipal.ROOT), input);
+										Future<ServiceResult> run = EAIResourceRepository.getInstance().getServiceRunner().run(service, EAIResourceRepository.getInstance().newExecutionContext(token), input);
 										ServiceResult serviceResult = run.get();
 										if (serviceResult.getException() != null) {
 											MainController.getInstance().notify(serviceResult.getException());
