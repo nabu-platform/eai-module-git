@@ -189,7 +189,7 @@ public class Services {
 //		if (status != null && status.hasUncommittedChanges()) {
 			// commit it
 		git.commit()
-			.setAll(true)
+//			.setAll(true)
 			.setCommitter(new PersonIdent(token == null ? "anonymous" : token.getName(), token == null ? "$anonymous" : token.getName()))
 			.setMessage(message == null ? "[AUTO] No message" : message)
 			.call();
