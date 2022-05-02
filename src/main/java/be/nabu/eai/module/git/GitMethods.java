@@ -99,10 +99,12 @@ public class GitMethods {
 	
 	// list all the merge parameters based on the definition (e.g. for config artifacts)
 	// the lambda getter allows you to choose how you resolve them (e.g. get from actual xml, get from key/value list...)
-	public List<MergeParameter> parameters(@GlueParam(name = "definition") String definition, @GlueParam(name = "getter") Lambda getter, @GlueParam(name = "forceAll") Boolean forceAll, @GlueParam(name = "explode") Boolean explode) throws IOException, ParseException {
+	// the prefix (if any) is added to the path of the parameter
+	// the name of the parameter has to be fully unique, in some cases (e.g. web application fragments), multiple instances can share keys with the exact same name
+	public List<MergeParameter> parameters(@GlueParam(name = "definition") String definition, @GlueParam(name = "getter") Lambda getter, @GlueParam(name = "forceAll") Boolean forceAll, @GlueParam(name = "explode") Boolean explode, @GlueParam(name = "prefix") String prefix) throws IOException, ParseException {
 		Structure structure = getDefinition(definition);
 		List<MergeParameter> parameters = new ArrayList<MergeParameter>();
-		recursiveParameters(structure, null, getter, forceAll != null && forceAll, parameters, explode == null || explode, explode == null || explode);
+		recursiveParameters(structure, prefix, getter, forceAll != null && forceAll, parameters, explode == null || explode, explode == null || explode);
 		
 		// if we explode arrays, we need to be able to deal with fields being removed or added
 		if (explode == null || explode) {
