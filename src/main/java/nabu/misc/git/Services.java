@@ -14,6 +14,7 @@ import java.nio.charset.Charset;
 import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 
 import javax.jws.WebParam;
@@ -23,6 +24,8 @@ import javax.validation.constraints.NotNull;
 
 import org.eclipse.jgit.api.AddCommand;
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.RmCommand;
+import org.eclipse.jgit.api.Status;
 import org.eclipse.jgit.api.TransportCommand;
 import org.eclipse.jgit.api.errors.AbortedByHookException;
 import org.eclipse.jgit.api.errors.CheckoutConflictException;
@@ -126,24 +129,88 @@ public class Services {
 		if (!(container instanceof FileDirectory)) {
 			throw new IllegalArgumentException("Can not commit '" + id + "', it is not file-based");
 		}
-		// we need to figure out the project it belongs to
-		Entry project = entry;
-		while (project != null && !EAIRepositoryUtils.isProject(project)) {
-			project = project.getParent();
-		}
-		if (project == null) {
-			throw new IllegalArgumentException("Could not find the project for the entry: " + entry.getId());
-		}
-		if (!(project instanceof ResourceEntry)) {
-			throw new IllegalArgumentException("Can not commit '" + id + "', the project is not resource-based");
-		}
+		Entry project = getProject(entry);
 		
 		// some are resolved twice, but in the parent commit() service we don't know the project yet
 		BasicPrincipal credentials = getCredentials(project.getId(), username, password);
 		
+		Git git = getGit(id);
+		
+		// run deployment actions within the entry
+		for (DeploymentAction action : repository.getArtifacts(DeploymentAction.class)) {
+			if (action.getId().startsWith(entry.getId() + ".") || action.getId().equals(entry.getId())) {
+				action.runSource();
+			}
+		}
+		
+		String path = entry.getId().equals(project.getId())
+			? "."
+			// it must reside in the project, so we substract the name of the project (and the .)
+			: entry.getId().substring(project.getId().length() + 1).replace(".", "/");
+
+        Status status = git.status().addPath(path).call();
+
+		AddCommand add = git.add();
+		RmCommand rm = git.rm();
+		add.addFilepattern(path);
+
+		Set<String> removed = status.getRemoved();
+		for (final String single : removed) {
+			System.out.println("removed: " + single);
+			add.addFilepattern(single);
+		}
+
+		Set<String> missing = status.getMissing();
+		for (final String single : missing) {
+			System.out.println("Missing: " + single);
+//			add.addFilepattern(s);
+			rm.addFilepattern(single);
+		}
+		add.call();
+		
+		if (missing.size() > 0) {
+			rm.call();
+		}
+		
+		// does not seem to work...?
+//		Status status = git.status().addPath(path).call();
+//		// only commit if relevant
+//		if (status != null && status.hasUncommittedChanges()) {
+			// commit it
+		git.commit()
+			// includes deleted files etc, hopefully still only on the path
+//			.setAll(true)
+			.setCommitter(new PersonIdent(token == null ? "anonymous" : token.getName(), token == null ? "$anonymous" : token.getName()))
+			.setMessage(message == null ? "[AUTO] No message" : message)
+			.call();
+		
+		if (push) {
+			// push it remotely if possible
+			List<RemoteConfig> call = git.remoteList().call();
+			for (RemoteConfig config : call) {
+				if (remote.equals(config.getName())) {
+					authenticate(git.push(), credentials.getName(), credentials.getPassword()).setRemote(remote).call();
+				}
+			}
+		}
+		
+		return git;
+	}
+
+	private Git getGit(String id) throws GitAPIException, IOException {
+		EAIResourceRepository repository = EAIResourceRepository.getInstance();
+		Entry entry = repository.getEntry(id);
+		if (!(entry instanceof ResourceEntry)) {
+			throw new IllegalArgumentException("Can not commit '" + id + "', it is not resource-based");
+		}
+		ResourceContainer<?> container = ((ResourceEntry) entry).getContainer();
+		if (!(container instanceof FileDirectory)) {
+			throw new IllegalArgumentException("Can not commit '" + id + "', it is not file-based");
+		}
+		Entry project = getProject(entry);
 		container = ((ResourceEntry) project).getContainer();
 		if (!(container instanceof FileDirectory)) {
-			throw new IllegalArgumentException("Can not commit '" + id + "', the project is not file-based");
+			throw new IllegalArgumentException("Can not commit '" + project.getId() + "', the project is not file-based");
 		}
 		Git git;
 		File file = ((FileDirectory) container).getFile();
@@ -167,44 +234,22 @@ public class Services {
 		else {
 			git = Git.open(new File(file, ".git"));
 		}
-		// run deployment actions within the entry
-		for (DeploymentAction action : repository.getArtifacts(DeploymentAction.class)) {
-			if (action.getId().startsWith(entry.getId() + ".") || action.getId().equals(entry.getId())) {
-				action.runSource();
-			}
-		}
-		
-		String path = entry.getId().equals(project.getId())
-			? "."
-			// it must reside in the project, so we substract the name of the project (and the .)
-			: entry.getId().substring(project.getId().length() + 1).replace(".", "/");
-
-		AddCommand add = git.add();
-		add.addFilepattern(path);
-		add.call();
-		
-		// does not seem to work...?
-//		Status status = git.status().addPath(path).call();
-//		// only commit if relevant
-//		if (status != null && status.hasUncommittedChanges()) {
-			// commit it
-		git.commit()
-//			.setAll(true)
-			.setCommitter(new PersonIdent(token == null ? "anonymous" : token.getName(), token == null ? "$anonymous" : token.getName()))
-			.setMessage(message == null ? "[AUTO] No message" : message)
-			.call();
-		
-		if (push) {
-			// push it remotely if possible
-			List<RemoteConfig> call = git.remoteList().call();
-			for (RemoteConfig config : call) {
-				if (remote.equals(config.getName())) {
-					authenticate(git.push(), credentials.getName(), credentials.getPassword()).setRemote(remote).call();
-				}
-			}
-		}
-		
 		return git;
+	}
+
+	private Entry getProject(Entry entry) {
+		// we need to figure out the project it belongs to
+		Entry project = entry;
+		while (project != null && !EAIRepositoryUtils.isProject(project)) {
+			project = project.getParent();
+		}
+		if (project == null) {
+			throw new IllegalArgumentException("Could not find the project for the entry: " + entry.getId());
+		}
+		if (!(project instanceof ResourceEntry)) {
+			throw new IllegalArgumentException("Can not commit '" + entry.getId() + "', the project is not resource-based");
+		}
+		return project;
 	}
 	
 	private <T extends TransportCommand<?, ?>> T authenticate(T command, String username, String password) {
@@ -220,7 +265,7 @@ public class Services {
 	// then merge the dev branch into the master
 	// then push the master to the origin (if available)
 	// this can start a remote build
-	public void release(@WebParam(name = "id") String id, @WebParam(name = "message") String message, @WebParam(name = "username") String username, @WebParam(name = "password") String password) throws IllegalStateException, FileNotFoundException, GitAPIException, IOException, ServiceException, InterruptedException, ExecutionException, ParseException {
+	public void release(@WebParam(name = "id") String id, @WebParam(name = "message") String message, @WebParam(name = "username") String username, @WebParam(name = "password") String password, @WebParam(name = "commitAll") Boolean commitAll) throws IllegalStateException, FileNotFoundException, GitAPIException, IOException, ServiceException, InterruptedException, ExecutionException, ParseException {
 		Token token = ServiceRuntime.getRuntime().getExecutionContext().getSecurityContext().getToken();
 		
 		Entry entry = EAIResourceRepository.getInstance().getEntry(id);
@@ -230,35 +275,40 @@ public class Services {
 		BasicPrincipal credentials = getCredentials(id, username, password);
 		
 		// first we run a commit cycle, we don't push yet, we first want to tag
-		Git git = commitInternal(id, "[AUTO] Commit for release", false, credentials.getName(), credentials.getPassword());
+		Git git = commitAll ? commitInternal(id, "[AUTO] Commit for release", false, credentials.getName(), credentials.getPassword()) : getGit(id);
 		
-		// then we tag it
-		// first we check what the highest version was that we tagged before
-		List<Ref> tags = git.tagList().call();
-		int highestVersion = 0;
-		for (Ref tag : tags) {
-			String name = tag.getName().replaceAll("^.*/([^/]+$)", "$1");
-			if (name.matches("^v[0-9]+$")) {
-				int tagVersion = Integer.parseInt(name.substring(1));
-				if (tagVersion > highestVersion) {
-					highestVersion = tagVersion;
+		try {
+			// then we tag it
+			// first we check what the highest version was that we tagged before
+			List<Ref> tags = git.tagList().call();
+			int highestVersion = 0;
+			for (Ref tag : tags) {
+				String name = tag.getName().replaceAll("^.*/([^/]+$)", "$1");
+				if (name.matches("^v[0-9]+$")) {
+					int tagVersion = Integer.parseInt(name.substring(1));
+					if (tagVersion > highestVersion) {
+						highestVersion = tagVersion;
+					}
+				}
+			}
+			// create the tag
+			git.tag()
+				.setName("v" + (highestVersion + 1))
+				.setMessage(message)
+				.setTagger(new PersonIdent(token == null ? "anonymous" : token.getName(), token == null ? "$anonymous" : token.getName()))
+				.call();
+			
+			// push it remotely if possible
+			List<RemoteConfig> call = git.remoteList().call();
+			for (RemoteConfig config : call) {
+				if (remote.equals(config.getName())) {
+					// we also push ze tags!
+					authenticate(git.push(), credentials.getName(), credentials.getPassword()).setPushTags().setRemote(remote).call();
 				}
 			}
 		}
-		// create the tag
-		git.tag()
-			.setName("v" + (highestVersion + 1))
-			.setMessage(message)
-			.setTagger(new PersonIdent(token == null ? "anonymous" : token.getName(), token == null ? "$anonymous" : token.getName()))
-			.call();
-		
-		// push it remotely if possible
-		List<RemoteConfig> call = git.remoteList().call();
-		for (RemoteConfig config : call) {
-			if (remote.equals(config.getName())) {
-				// we also push ze tags!
-				authenticate(git.push(), credentials.getName(), credentials.getPassword()).setPushTags().setRemote(remote).call();
-			}
+		finally {
+			git.close();
 		}
 	}
 	
@@ -524,7 +574,7 @@ public class Services {
 					File project = ((FileDirectory) container).getFile();
 					// if the project is not yet version controlled, we need to add that
 					if (!new File(project, ".git").exists()) {
-						release(name, "Release for first build", username, password);
+						release(name, "Release for first build", username, password, true);
 					}
 					clone(workspace, name, project.toURI(), credentials.getName(), credentials.getPassword());
 				}

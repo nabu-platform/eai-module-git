@@ -21,6 +21,7 @@ import be.nabu.libs.authentication.impl.BasicPrincipalImpl;
 import be.nabu.libs.services.api.Service;
 import be.nabu.libs.services.api.ServiceResult;
 import be.nabu.libs.types.api.ComplexContent;
+import be.nabu.libs.types.base.ValueImpl;
 import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
 import javafx.scene.control.Menu;
@@ -44,6 +45,7 @@ public class GitContextMenu implements EntryContextMenuProvider {
 				@Override
 				public void handle(ActionEvent arg0) {
 					SimpleProperty<String> message = new SimpleProperty<String>("Message", String.class, false);
+					message.setLarge(true);
 					SimplePropertyUpdater updater = new SimplePropertyUpdater(true, new HashSet(Arrays.asList(message)));
 					EAIDeveloperUtils.buildPopup(MainController.getInstance(), updater, "Commit", new EventHandler<ActionEvent>() {
 						@Override
@@ -81,17 +83,21 @@ public class GitContextMenu implements EntryContextMenuProvider {
 					@Override
 					public void handle(ActionEvent arg0) {
 						SimpleProperty<String> message = new SimpleProperty<String>("Message", String.class, false);
-						SimplePropertyUpdater updater = new SimplePropertyUpdater(true, new HashSet(Arrays.asList(message)));
+						message.setLarge(true);
+						SimpleProperty<Boolean> commitAll = new SimpleProperty<Boolean>("Commit All", Boolean.class, false);
+						SimplePropertyUpdater updater = new SimplePropertyUpdater(true, new HashSet(Arrays.asList(message, commitAll)), new ValueImpl<Boolean>(commitAll, true));
 						EAIDeveloperUtils.buildPopup(MainController.getInstance(), updater, "Release", new EventHandler<ActionEvent>() {
 							@Override
 							public void handle(ActionEvent arg0) {
 								try {
 									String message = updater.getValue("Message");
+									Boolean commit = updater.getValue("Commit All");
 									Service service = (Service) EAIResourceRepository.getInstance().resolve("nabu.misc.git.Services.release");
 									if (service != null) {
 										ComplexContent input = service.getServiceInterface().getInputDefinition().newInstance();
 										input.set("id", entry.getId());
 										input.set("message", message);
+										input.set("commitAll", commit);
 										Future<ServiceResult> run = EAIResourceRepository.getInstance().getServiceRunner().run(service, EAIResourceRepository.getInstance().newExecutionContext(token), input);
 										ServiceResult serviceResult = run.get();
 										if (serviceResult.getException() != null) {
