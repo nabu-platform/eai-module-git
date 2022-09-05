@@ -85,7 +85,7 @@ public class GitContextMenu implements EntryContextMenuProvider {
 						SimpleProperty<String> message = new SimpleProperty<String>("Message", String.class, false);
 						message.setLarge(true);
 						SimpleProperty<Boolean> commitAll = new SimpleProperty<Boolean>("Commit All", Boolean.class, false);
-						SimplePropertyUpdater updater = new SimplePropertyUpdater(true, new HashSet(Arrays.asList(message, commitAll)), new ValueImpl<Boolean>(commitAll, true));
+						SimplePropertyUpdater updater = new SimplePropertyUpdater(true, new HashSet(Arrays.asList(message, commitAll)), new ValueImpl<Boolean>(commitAll, false));
 						EAIDeveloperUtils.buildPopup(MainController.getInstance(), updater, "Release", new EventHandler<ActionEvent>() {
 							@Override
 							public void handle(ActionEvent arg0) {
