@@ -114,7 +114,7 @@ public class GitMethods {
 			List<String> impactedPaths = new ArrayList<String>();
 			for (MergeParameter parameter : parameters) {
 				// remove all array access
-				impactedPaths.add(parameter.getName().replaceAll("\\[[^\\]]\\]", ""));
+				impactedPaths.add(parameter.getName().replaceAll("\\[[^\\]]+\\]", ""));
 			}
 			MergeEntry merged = merged();
 			if (merged != null) {
@@ -122,7 +122,7 @@ public class GitMethods {
 					for (MergeParameter parameter : merged.getParameters()) {
 						// if the parameter is not in the list yet, check if it should be
 						if (parameters.indexOf(parameter) < 0) {
-							String impactedPath = parameter.getName().replaceAll("\\[[^\\]]\\]", "");
+							String impactedPath = parameter.getName().replaceAll("\\[[^\\]]+\\]", "");
 							// only add it if it is a variant of something already added
 							if (impactedPaths.indexOf(impactedPath) >= 0) {
 								parameters.add(parameter);
