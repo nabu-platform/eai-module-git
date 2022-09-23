@@ -26,6 +26,7 @@ import org.eclipse.jgit.api.AddCommand;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.RmCommand;
 import org.eclipse.jgit.api.Status;
+import org.eclipse.jgit.api.StatusCommand;
 import org.eclipse.jgit.api.TransportCommand;
 import org.eclipse.jgit.api.errors.AbortedByHookException;
 import org.eclipse.jgit.api.errors.CheckoutConflictException;
@@ -63,6 +64,7 @@ import be.nabu.eai.repository.EAIResourceRepository;
 import be.nabu.eai.repository.api.Entry;
 import be.nabu.eai.repository.api.ResourceEntry;
 import be.nabu.eai.repository.resources.RepositoryEntry;
+import be.nabu.libs.artifacts.api.CommitableArtifact;
 import be.nabu.libs.authentication.api.Token;
 import be.nabu.libs.authentication.api.principals.BasicPrincipal;
 import be.nabu.libs.authentication.impl.BasicPrincipalImpl;
@@ -139,20 +141,49 @@ public class Services {
 		// run deployment actions within the entry
 		for (DeploymentAction action : repository.getArtifacts(DeploymentAction.class)) {
 			if (action.getId().startsWith(entry.getId() + ".") || action.getId().equals(entry.getId())) {
-				action.runSource();
+				try {
+					action.runSource();
+				}
+				catch (Exception e) {
+					logger.error("Could not run deployment action: " + action.getId(), e);
+				}
 			}
 		}
 		
+		// run commitable artifacts within the entry
+		for (CommitableArtifact commitable : repository.getArtifacts(CommitableArtifact.class)) {
+			if (commitable.getId().startsWith(entry.getId() + ".") || commitable.getId().equals(entry.getId())) {
+				try {
+					commitable.beforeCommit();
+				}
+				catch (Exception e) {
+					logger.error("Could not run before commit artifact: " + commitable.getId(), e);
+				}
+			}
+		}
+		
+		// originally we set the path to "." for the root, but this does not work! nested deletes etc are not picked up
 		String path = entry.getId().equals(project.getId())
-			? "."
+			? null
 			// it must reside in the project, so we substract the name of the project (and the .)
 			: entry.getId().substring(project.getId().length() + 1).replace(".", "/");
-
-        Status status = git.status().addPath(path).call();
+		
+        StatusCommand statusCommand = git.status();
+        if (path != null) {
+        	statusCommand.addPath(path);
+        }
+        Status status = statusCommand.call();
 
 		AddCommand add = git.add();
 		RmCommand rm = git.rm();
-		add.addFilepattern(path);
+		
+		if (path != null) {
+			add.addFilepattern(path);
+		}
+		// we must have at least one add, otherwise it fails!
+		else {
+			add.addFilepattern(".");
+		}
 
 		Set<String> removed = status.getRemoved();
 		for (final String single : removed) {
@@ -179,7 +210,7 @@ public class Services {
 			// commit it
 		git.commit()
 			// includes deleted files etc, hopefully still only on the path
-//			.setAll(true)
+			.setAll(path == null)
 			.setCommitter(new PersonIdent(token == null ? "anonymous" : token.getName(), token == null ? "$anonymous" : token.getName()))
 			.setMessage(message == null ? "[AUTO] No message" : message)
 			.call();
