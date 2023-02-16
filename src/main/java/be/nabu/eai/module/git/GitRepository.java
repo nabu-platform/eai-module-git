@@ -34,6 +34,7 @@ import javax.xml.bind.JAXBContext;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.PullResult;
 import org.eclipse.jgit.api.TransportCommand;
+import org.eclipse.jgit.api.ListBranchCommand.ListMode;
 import org.eclipse.jgit.api.MergeCommand.FastForwardMode;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.api.errors.InvalidRefNameException;
@@ -481,24 +482,39 @@ public class GitRepository implements AutoCloseable {
 					if (name.matches("^v[0-9]+$")) {
 						int tagVersion = Integer.parseInt(name.substring(1));
 						RevCommit commit = getCommit(tag);
+						if (lastVersion == null) {
+							logger.info("No last version yet, starting from last version " + name + " with commit " + commit);
+						}
+						else {
+							logger.info("Checking last version " + lastVersion + " released on " + lastVersion.getDate() + " vs commit " + commit);
+						}
 						// if this version tag is more recent than the last version we have, we start a new branch
 						if (lastVersion == null || lastVersion.getDate().before(GitUtils.getCommitDate(commit))) {
 							GitRelease newVersion = new GitRelease(tagVersion);
 							String newBranchName = "r" + tagVersion;
 							logger.info("Found a new version on branch '" + branch + "', creating release '" + newBranchName + "'");
 							getVersions().add(newVersion);
-							// we create the new branch
-							Ref call = git.branchCreate().setStartPoint(commit).setName(newBranchName).call();
-							newVersion.setRevCommit(commit);
 							
-							// we want to upstream the rx branch (if relevant) to allow for easy hotfixing
-							// if you want to hotfix a particular version, on the development server, fetch the r1, r2... branch, switch to that and apply any hotfixes
-							// anything you commit should get picked up
-							if (remote != null) {
-								// pull the latest data
-								RefSpec refSpec = new RefSpec("refs/heads/" + newBranchName);
-								logger.info("Pushing branch '" + newBranchName + "' to '" + remote + "'");
-								authenticate(git.push()).setRefSpecs(refSpec).setRemote(remote).call();
+							try {
+								logger.info("Attempting checkout of already existing branch: " + newBranchName);
+								git.checkout().setName(newBranchName).call();
+								newVersion.setRevCommit(getLastCommitOn(newBranchName));
+							}
+							catch (Exception e) {
+								logger.info("Branch " + newBranchName + " does not exist yet, creating a new release branch for " + name);
+								// we create the new branch
+								Ref call = git.branchCreate().setStartPoint(commit).setName(newBranchName).call();
+								newVersion.setRevCommit(commit);
+								
+								// we want to upstream the rx branch (if relevant) to allow for easy hotfixing
+								// if you want to hotfix a particular version, on the development server, fetch the r1, r2... branch, switch to that and apply any hotfixes
+								// anything you commit should get picked up
+								if (remote != null) {
+									// pull the latest data
+									RefSpec refSpec = new RefSpec("refs/heads/" + newBranchName);
+									logger.info("Pushing branch '" + newBranchName + "' to '" + remote + "'");
+									authenticate(git.push()).setRefSpecs(refSpec).setRemote(remote).call();
+								}
 							}
 							
 							createPatch(newVersion, 0);
@@ -554,17 +570,28 @@ public class GitRepository implements AutoCloseable {
 					logger.info("Found a new commit on branch '" + branch + "', creating release '" + newBranchName + "'");
 					
 					getVersions().add(newVersion);
-					// we create the new branch
-					Ref call = git.branchCreate().setName(newBranchName).setStartPoint(lastCommitOn).call();
-					newVersion.setRevCommit(getCommit(call));
 					
-					// we want to upstream the rx branch (if relevant) to allow for easy hotfixing
-					// if you want to hotfix a particular version, on the development server, fetch the r1, r2... branch, switch to that and apply any hotfixes
-					// anything you commit should get picked up
-					if (remote != null) {
-						RefSpec refSpec = new RefSpec("refs/heads/" + newBranchName);
-						logger.info("Pushing branch '" + newBranchName + "' to '" + remote + "'");
-						authenticate(git.push()).setRefSpecs(refSpec).setRemote(remote).call();
+					// first we try to check out the branch
+					// for shared repos, someone else may have already created the release branch
+					try {
+						logger.info("Attempting checkout of already existing branch: " + newBranchName);
+						git.checkout().setName(newBranchName).call();
+						newVersion.setRevCommit(getLastCommitOn(newBranchName));
+					}
+					catch (Exception e) {
+						logger.info("Branch " + newBranchName + " does not exist yet, creating a new release branch");
+						// we create the new branch
+						Ref call = git.branchCreate().setName(newBranchName).setStartPoint(lastCommitOn).call();
+						newVersion.setRevCommit(getCommit(call));
+						
+						// we want to upstream the rx branch (if relevant) to allow for easy hotfixing
+						// if you want to hotfix a particular version, on the development server, fetch the r1, r2... branch, switch to that and apply any hotfixes
+						// anything you commit should get picked up
+						if (remote != null) {
+							RefSpec refSpec = new RefSpec("refs/heads/" + newBranchName);
+							logger.info("Pushing branch '" + newBranchName + "' to '" + remote + "'");
+							authenticate(git.push()).setRefSpecs(refSpec).setRemote(remote).call();
+						}
 					}
 					
 					createPatch(newVersion, 0);
@@ -1430,6 +1457,7 @@ public class GitRepository implements AutoCloseable {
 	
 	private List<Ref> getBranches() {
 		try {
+//			return git.branchList().setListMode(ListMode.ALL).call();
 			return git.branchList().call();
 		}
 		catch (Exception e) {
