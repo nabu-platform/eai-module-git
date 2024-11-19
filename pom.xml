@@ -123,10 +123,17 @@
 			<artifactId>eai-module-types-structure</artifactId>
 			<scope>provided</scope>
 		</dependency>
+		<!-- https://mvnrepository.com/artifact/org.eclipse.jgit/org.eclipse.jgit -->
 		<dependency>
 			<groupId>org.eclipse.jgit</groupId>
 			<artifactId>org.eclipse.jgit</artifactId>
-			<version>7.0.0.202409031743-r</version>
+			<version>5.13.3.202401111512-r</version>
 		</dependency>
+		<!-- jgit 6 requires java 11+, jgit 7 requires java 17+, so we for now we are sticking with jgit 5 -->
+		<!--<dependency>
+			<groupId>org.eclipse.jgit</groupId>
+			<artifactId>org.eclipse.jgit</artifactId>
+			<version>7.0.0.202409031743-r</version>
+		</dependency>-->
 	</dependencies>
 </project>
