@@ -214,14 +214,16 @@ public class GitRepository implements AutoCloseable {
 	private File zipFolder;
 	
 	public static void main(String...args) throws IOException, NoHeadException, GitAPIException {
-		GitRepository gitRepository = new GitRepository(new File("/home/alex/.nabu/repositories/local-test/test"));
+		GitRepository gitRepository = new GitRepository(new File("/home/alex/nabu/builds/cloud/portal"));
 		System.out.println(gitRepository.getVersions());
-//		for (RevCommit commit : gitRepository.getCommitsOn("refs/heads/r1.0")) {
+//		System.out.println(gitRepository.getMergeResult("refs/remotes/build/r10.0-prd"));
+		System.out.println("last: " + gitRepository.getLastVersion().getReference());
+//		for (RevCommit commit : gitRepository.getCommitsOn("refs/remotes/build/r10.0")) {
 //			System.out.println("commit on branch: " + commit.getId().getName() + " / " + commit.getAuthorIdent().getWhen());
 //		}
 //		gitRepository.addEnvironment("dev", null);
-		gitRepository.checkForAnyPrimaryUpdates();
-		gitRepository.checkForSecondaryUpdates(null);
+//		gitRepository.checkForAnyPrimaryUpdates();
+//		gitRepository.checkForSecondaryUpdates(null);
 	}
 	
 	public GitRepository(File folder) {
@@ -367,6 +369,8 @@ public class GitRepository implements AutoCloseable {
 		int counter = 0;
 		Map<String, Ref> remoteMap;
 		try {
+			// this is equivalent to git ls-remote
+			// not git show-ref, for that you need to do git.getRepository().getRefDatabase().getRefs()
 			remoteMap = authenticate(git.lsRemote()).setTags(false).callAsMap();
 		}
 		catch (Exception e) {
@@ -1365,10 +1369,24 @@ public class GitRepository implements AutoCloseable {
 		return versions.isEmpty() ? null : versions.last();
 	}
 	
+	private ObjectId resolve(String name) {
+		try {
+			ObjectId objectId = git.getRepository().resolve(name);
+			// if we can't find it locally, check the remote refs for the build target
+			if (objectId == null) {
+				objectId = git.getRepository().resolve("refs/remotes/" + remoteBuild + "/" + name);	
+			}
+			return objectId;
+		}
+		catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+	
 	// can use the full name like refs/heads/master or just "master"
 	private Iterable<RevCommit> getCommitsOn(String name) {
 		try {
-			return git.log().add(git.getRepository().resolve(name)).call();
+			return git.log().add(resolve(name)).call();
 		}
 		catch (Exception e) {
 			throw new RuntimeException(e);
@@ -1453,7 +1471,8 @@ public class GitRepository implements AutoCloseable {
 	
 	private RevCommit getCommit(Ref ref) {
 		try (RevWalk revWalk = new RevWalk(git.getRepository())) {
-			return revWalk.parseCommit(ref.getObjectId());
+			RevCommit commit = revWalk.parseCommit(ref.getObjectId());
+			return commit;
 		}
 		catch (Exception e) {
 			throw new RuntimeException(e);
@@ -1474,8 +1493,10 @@ public class GitRepository implements AutoCloseable {
 	
 	private List<Ref> getBranches() {
 		try {
-//			return git.branchList().setListMode(ListMode.ALL).call();
-			return git.branchList().call();
+			// this lists both local and remote branches, this means both refs/remotes and refs/heads
+			return git.branchList().setListMode(ListMode.ALL).call();
+			// this lists only local branches, especially when copying a build environment, they may reside only in remote branches
+//			return git.branchList().call();
 		}
 		catch (Exception e) {
 			throw new RuntimeException(e);

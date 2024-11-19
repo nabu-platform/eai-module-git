@@ -709,24 +709,42 @@ public class Services {
 		return builds;
 	}
 	
-	private File getBuildsFolder() {
-		String property = System.getProperty("git.build");
-		File builds;
-		// if you don't set an explicit property, we use the home folder
-		if (property == null) {
-			File directory = new File(System.getProperty("user.home"));
-			File nabu = new File(directory, ".nabu");
-			builds = new File(nabu, "builds");
+	private static File buildsFolder;
+	
+	private static File getBuildsFolder() {
+		if (buildsFolder == null) {
+			String property = System.getProperty("git.build");
+			File builds;
+			// if you don't set an explicit property, we use the home folder
+			if (property == null) {
+				// first we check if you have a nabu configuration file
+				String buildPath = (String) EAIResourceRepository.getGlobalNabuConfiguration().get("builds");
+				if (buildPath == null) {
+					buildPath = (String) EAIResourceRepository.getGlobalNabuConfiguration().get("home");
+					if (buildPath != null) {
+						buildPath += "/builds";
+					}
+				}
+				if (buildPath != null) {
+					builds = new File(buildPath);
+				}
+				else {
+					File directory = new File(System.getProperty("user.home"));
+					File nabu = new File(directory, ".nabu");
+					builds = new File(nabu, "builds");
+				}
+			}
+			else {
+				builds = new File(property);
+				// we want a subfolder because the images are likely right next to this
+				builds = new File(builds, "builds");
+			}
+			if (!builds.exists()) {
+				builds.mkdirs();
+			}
+			return buildsFolder = builds;
 		}
-		else {
-			builds = new File(property);
-			// we want a subfolder because the images are likely right next to this
-			builds = new File(builds, "builds");
-		}
-		if (!builds.exists()) {
-			builds.mkdirs();
-		}
-		return builds;
+		return buildsFolder;
 	}
 	
 	private File getZipFolder(String workspace, String project) {
