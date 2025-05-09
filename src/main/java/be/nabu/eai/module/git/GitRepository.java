@@ -1218,7 +1218,8 @@ public class GitRepository implements AutoCloseable {
 		}
 	}
 	
-	private static String standardEndpoint = System.getProperty("git.merge.endpoint", "https://my.nabu.be/resources/merge");
+//	private static String standardEndpoint = System.getProperty("git.merge.endpoint", "https://my.nabu.be/resources/merge");
+	private static String standardEndpoint = System.getProperty("git.merge.endpoint", "https://raw.githubusercontent.com/nabu-platform/merge-scripts/refs/heads/master/default");
 	
 	private String getStandardMergeScript(GitNode node, Map<URI, String> resolved) {
 		if (node.getArtifactManager() != null) {
