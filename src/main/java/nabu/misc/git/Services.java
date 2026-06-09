@@ -30,6 +30,8 @@ import java.net.URI;
 import java.nio.charset.Charset;
 import java.text.ParseException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
@@ -138,102 +140,62 @@ public class Services {
 
 	private Git commitInternal(String id, String message, boolean push, String username, String password) throws GitAPIException, IOException, FileNotFoundException, NoFilepatternException, AbortedByHookException, ConcurrentRefUpdateException, NoHeadException, NoMessageException, ServiceUnavailableException, UnmergedPathsException, WrongRepositoryStateException, RefAlreadyExistsException, RefNotFoundException, InvalidRefNameException, CheckoutConflictException, ServiceException, InterruptedException, ExecutionException, InvalidRemoteException, TransportException, ParseException {
 		Token token = ServiceRuntime.getRuntime().getExecutionContext().getSecurityContext().getToken();
-		
+		return commitInternal(id, java.util.Collections.singleton(id), message, push, username, password, token, token == null ? null : token.getName(), token == null ? null : token.getName());
+	}
+
+	public Git commitInternal(String projectId, Collection<String> ids, String message, boolean push, String username, String password, Token token, String authorName, String authorEmail) throws GitAPIException, IOException, FileNotFoundException, NoFilepatternException, AbortedByHookException, ConcurrentRefUpdateException, NoHeadException, NoMessageException, ServiceUnavailableException, UnmergedPathsException, WrongRepositoryStateException, RefAlreadyExistsException, RefNotFoundException, InvalidRefNameException, CheckoutConflictException, ServiceException, InterruptedException, ExecutionException, InvalidRemoteException, TransportException, ParseException {
 		EAIResourceRepository repository = EAIResourceRepository.getInstance();
-		Entry entry = repository.getEntry(id);
-		if (!(entry instanceof ResourceEntry)) {
-			throw new IllegalArgumentException("Can not commit '" + id + "', it is not resource-based");
+		Entry project = repository.getEntry(projectId);
+		if (project == null || !EAIRepositoryUtils.isProject(project)) {
+			throw new IllegalArgumentException("Not a valid project id: " + projectId);
 		}
-		ResourceContainer<?> container = ((ResourceEntry) entry).getContainer();
-		if (!(container instanceof FileDirectory)) {
-			throw new IllegalArgumentException("Can not commit '" + id + "', it is not file-based");
+		if (!(project instanceof ResourceEntry)) {
+			throw new IllegalArgumentException("Can not commit '" + projectId + "', the project is not resource-based");
 		}
-		Entry project = getProject(entry);
-		
-		// some are resolved twice, but in the parent commit() service we don't know the project yet
 		BasicPrincipal credentials = getCredentials(project.getId(), username, password);
-		
-		Git git = getGit(id);
-		
-		// run deployment actions within the entry
-		for (DeploymentAction action : repository.getArtifacts(DeploymentAction.class)) {
-			if (action.getId().startsWith(entry.getId() + ".") || action.getId().equals(entry.getId())) {
-				try {
-					action.runSource();
-				}
-				catch (Exception e) {
-					logger.error("Could not run deployment action: " + action.getId(), e);
-				}
+		Git git = getGit(projectId);
+		Set<String> entryIds = normalizeEntryIds(project, ids);
+		runBeforeCommitHooks(repository, entryIds);
+		Set<String> paths = toPaths(project, entryIds);
+
+		StatusCommand statusCommand = git.status();
+		for (String path : paths) {
+			if (path != null) {
+				statusCommand.addPath(path);
 			}
 		}
-		
-		// run commitable artifacts within the entry
-		for (CommitableArtifact commitable : repository.getArtifacts(CommitableArtifact.class)) {
-			if (commitable.getId().startsWith(entry.getId() + ".") || commitable.getId().equals(entry.getId())) {
-				try {
-					commitable.beforeCommit();
-				}
-				catch (Exception e) {
-					logger.error("Could not run before commit artifact: " + commitable.getId(), e);
-				}
-			}
-		}
-		
-		// originally we set the path to "." for the root, but this does not work! nested deletes etc are not picked up
-		String path = entry.getId().equals(project.getId())
-			? null
-			// it must reside in the project, so we substract the name of the project (and the .)
-			: entry.getId().substring(project.getId().length() + 1).replace(".", "/");
-		
-        StatusCommand statusCommand = git.status();
-        if (path != null) {
-        	statusCommand.addPath(path);
-        }
-        Status status = statusCommand.call();
+		Status status = statusCommand.call();
 
 		AddCommand add = git.add();
 		RmCommand rm = git.rm();
-		
-		if (path != null) {
-			add.addFilepattern(path);
-		}
-		// we must have at least one add, otherwise it fails!
-		else {
+		if (paths.contains(null)) {
 			add.addFilepattern(".");
 		}
-
-		Set<String> removed = status.getRemoved();
-		for (final String single : removed) {
-			System.out.println("removed: " + single);
+		else {
+			for (String path : paths) {
+				add.addFilepattern(path);
+			}
+		}
+		for (String single : status.getRemoved()) {
 			add.addFilepattern(single);
 		}
-
 		Set<String> missing = status.getMissing();
-		for (final String single : missing) {
-			System.out.println("Missing: " + single);
-//			add.addFilepattern(s);
+		for (String single : missing) {
 			rm.addFilepattern(single);
 		}
 		add.call();
-		
-		if (missing.size() > 0) {
+		if (!missing.isEmpty()) {
 			rm.call();
 		}
-		
-		// does not seem to work...?
-//		Status status = git.status().addPath(path).call();
-//		// only commit if relevant
-//		if (status != null && status.hasUncommittedChanges()) {
-			// commit it
+
+		PersonIdent author = new PersonIdent(valueOrDefault(authorName, token == null ? "anonymous" : token.getName()), valueOrDefault(authorEmail, token == null ? "$anonymous" : token.getName()));
 		git.commit()
-			// includes deleted files etc, hopefully still only on the path
-			.setAll(path == null)
-			.setCommitter(new PersonIdent(token == null ? "anonymous" : token.getName(), token == null ? "$anonymous" : token.getName()))
+			.setAll(paths.contains(null))
+			.setAuthor(author)
+			.setCommitter(author)
 			.setMessage(message == null ? "[AUTO] No message" : message)
 			.call();
-		
 		if (push) {
-			// push it remotely if possible
 			List<RemoteConfig> call = git.remoteList().call();
 			for (RemoteConfig config : call) {
 				if (remote.equals(config.getName())) {
@@ -241,7 +203,6 @@ public class Services {
 				}
 			}
 		}
-		
 		return git;
 	}
 
@@ -299,6 +260,83 @@ public class Services {
 		}
 		return project;
 	}
+
+	private Set<String> normalizeEntryIds(Entry project, Collection<String> ids) {
+		Set<String> entryIds = new LinkedHashSet<String>();
+		if (ids == null || ids.isEmpty()) {
+			entryIds.add(project.getId());
+			return entryIds;
+		}
+		EAIResourceRepository repository = EAIResourceRepository.getInstance();
+		for (String id : ids) {
+			if (id == null || id.trim().isEmpty()) {
+				continue;
+			}
+			Entry entry = repository.getEntry(id.trim());
+			if (entry == null) {
+				throw new IllegalArgumentException("Unknown entry: " + id);
+			}
+			Entry entryProject = getProject(entry);
+			if (!project.getId().equals(entryProject.getId())) {
+				throw new IllegalArgumentException("Entry '" + entry.getId() + "' does not belong to project '" + project.getId() + "'");
+			}
+			entryIds.add(entry.getId());
+		}
+		if (entryIds.isEmpty()) {
+			entryIds.add(project.getId());
+		}
+		return entryIds;
+	}
+
+	private void runBeforeCommitHooks(EAIResourceRepository repository, Set<String> entryIds) {
+		for (DeploymentAction action : repository.getArtifacts(DeploymentAction.class)) {
+			if (isWithinAny(action.getId(), entryIds)) {
+				try {
+					action.runSource();
+				}
+				catch (Exception e) {
+					logger.error("Could not run deployment action: " + action.getId(), e);
+				}
+			}
+		}
+		for (CommitableArtifact commitable : repository.getArtifacts(CommitableArtifact.class)) {
+			if (isWithinAny(commitable.getId(), entryIds)) {
+				try {
+					commitable.beforeCommit();
+				}
+				catch (Exception e) {
+					logger.error("Could not run before commit artifact: " + commitable.getId(), e);
+				}
+			}
+		}
+	}
+
+	private boolean isWithinAny(String id, Set<String> parents) {
+		for (String parent : parents) {
+			if (id.equals(parent) || id.startsWith(parent + ".")) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private Set<String> toPaths(Entry project, Set<String> entryIds) {
+		Set<String> paths = new LinkedHashSet<String>();
+		for (String id : entryIds) {
+			paths.add(toPath(project, id));
+		}
+		return paths;
+	}
+
+	private String toPath(Entry project, String id) {
+		return id.equals(project.getId())
+			? null
+			: id.substring(project.getId().length() + 1).replace(".", "/");
+	}
+	
+	private String valueOrDefault(String value, String fallback) {
+		return value == null || value.trim().isEmpty() ? fallback : value;
+	}
 	
 	private <T extends TransportCommand<?, ?>> T authenticate(T command, String username, String password) {
 		if (username != null) {
@@ -315,7 +353,10 @@ public class Services {
 	// this can start a remote build
 	public void release(@WebParam(name = "id") String id, @WebParam(name = "message") String message, @WebParam(name = "username") String username, @WebParam(name = "password") String password, @WebParam(name = "commitAll") Boolean commitAll) throws IllegalStateException, FileNotFoundException, GitAPIException, IOException, ServiceException, InterruptedException, ExecutionException, ParseException {
 		Token token = ServiceRuntime.getRuntime().getExecutionContext().getSecurityContext().getToken();
-		
+		releaseInternal(id, message, username, password, commitAll, token);
+	}
+
+	public void releaseInternal(String id, String message, String username, String password, Boolean commitAll, Token token) throws IllegalStateException, FileNotFoundException, GitAPIException, IOException, ServiceException, InterruptedException, ExecutionException, ParseException {
 		Entry entry = EAIResourceRepository.getInstance().getEntry(id);
 		if (!EAIRepositoryUtils.isProject(entry)) {
 			throw new IllegalArgumentException("Not a valid project id: " + id);

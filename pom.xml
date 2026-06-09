@@ -30,6 +30,11 @@
 		</dependency>
 		<dependency>
 			<groupId>be.nabu.eai</groupId>
+			<artifactId>eai-server</artifactId>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>be.nabu.eai</groupId>
 			<artifactId>eai-developer</artifactId>
 			<scope>provided</scope>
 		</dependency>
