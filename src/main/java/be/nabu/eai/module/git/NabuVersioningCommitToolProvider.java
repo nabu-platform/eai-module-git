@@ -131,11 +131,18 @@ public class NabuVersioningCommitToolProvider implements MCPToolProvider<NabuVer
 		structuredContent.put("projects", projects);
 		structuredContent.put("count", projects.size());
 		structuredContent.put("failedCount", failedCount);
-		String summary = "Recorded versioned changes for " + (projects.size() - failedCount) + " project(s).";
+		StringBuilder summary = new StringBuilder();
+		summary.append("Recorded versioned changes for ").append(projects.size() - failedCount).append(" project(s).");
 		if (failedCount > 0) {
-			summary += " Failed for " + failedCount + " project(s).";
+			summary.append(" Failed for ").append(failedCount).append(" project(s).");
+			for (Map<String, Object> project : projects) {
+				if (Boolean.FALSE.equals(project.get("success")) && project.get("message") != null) {
+					summary.append("\n- ").append(project.get("projectId")).append(": ").append(project.get("message"));
+				}
+			}
 		}
-		return new MCPToolResult(structuredContent, summary, null, failedCount > 0, failedCount > 0 ? summary : null);
+		String summaryText = summary.toString();
+		return new MCPToolResult(structuredContent, summaryText, null, failedCount > 0, failedCount > 0 ? summaryText : null);
 	}
 
 	private Map<String, Set<String>> groupByProject(NabuVersioningCommitInput input) {
