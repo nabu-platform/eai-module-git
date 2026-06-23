@@ -140,7 +140,12 @@ public class Services {
 
 	private Git commitInternal(String id, String message, boolean push, String username, String password) throws GitAPIException, IOException, FileNotFoundException, NoFilepatternException, AbortedByHookException, ConcurrentRefUpdateException, NoHeadException, NoMessageException, ServiceUnavailableException, UnmergedPathsException, WrongRepositoryStateException, RefAlreadyExistsException, RefNotFoundException, InvalidRefNameException, CheckoutConflictException, ServiceException, InterruptedException, ExecutionException, InvalidRemoteException, TransportException, ParseException {
 		Token token = ServiceRuntime.getRuntime().getExecutionContext().getSecurityContext().getToken();
-		return commitInternal(id, java.util.Collections.singleton(id), message, push, username, password, token, token == null ? null : token.getName(), token == null ? null : token.getName());
+		Entry entry = EAIResourceRepository.getInstance().getEntry(id);
+		if (entry == null) {
+			throw new IllegalArgumentException("Unknown entry: " + id);
+		}
+		Entry project = getProject(entry);
+		return commitInternal(project.getId(), java.util.Collections.singleton(id), message, push, username, password, token, token == null ? null : token.getName(), token == null ? null : token.getName());
 	}
 
 	public Git commitInternal(String projectId, Collection<String> ids, String message, boolean push, String username, String password, Token token, String authorName, String authorEmail) throws GitAPIException, IOException, FileNotFoundException, NoFilepatternException, AbortedByHookException, ConcurrentRefUpdateException, NoHeadException, NoMessageException, ServiceUnavailableException, UnmergedPathsException, WrongRepositoryStateException, RefAlreadyExistsException, RefNotFoundException, InvalidRefNameException, CheckoutConflictException, ServiceException, InterruptedException, ExecutionException, InvalidRemoteException, TransportException, ParseException {
@@ -245,7 +250,6 @@ public class Services {
 		}
 		return git;
 	}
-
 	private Entry getProject(Entry entry) {
 		// we need to figure out the project it belongs to
 		Entry project = entry;
