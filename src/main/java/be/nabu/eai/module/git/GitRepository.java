@@ -49,6 +49,7 @@ import java.util.zip.ZipOutputStream;
 import javax.xml.bind.JAXBContext;
 
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.GitCommand;
 import org.eclipse.jgit.api.PullResult;
 import org.eclipse.jgit.api.TransportCommand;
 import org.eclipse.jgit.api.ListBranchCommand.ListMode;
@@ -95,6 +96,7 @@ import be.nabu.libs.resources.ResourceUtils;
 import be.nabu.libs.resources.URIUtils;
 import be.nabu.libs.resources.api.Resource;
 import be.nabu.libs.resources.file.FileDirectory;
+import be.nabu.libs.resources.file.FileRevisions;
 import be.nabu.libs.types.TypeUtils;
 import be.nabu.libs.types.api.ComplexType;
 import be.nabu.libs.types.binding.api.Window;
@@ -286,6 +288,12 @@ public class GitRepository implements AutoCloseable {
 		createEnvironmentBranch(lastPatch.getRelease(), lastPatch, name, originalEnvironment);
 	}
 	
+	private <T> T mutate(GitCommand<T> command) throws GitAPIException {
+		try (FileRevisions.Mutation mutation = FileRevisions.beginExternalMutation(git.getRepository().getWorkTree())) {
+			return command.call();
+		}
+	}
+
 	private <T extends TransportCommand<?, ?>> T authenticate(T command) {
 		if (username != null) {
 			command.setCredentialsProvider(new UsernamePasswordCredentialsProvider(username, password));
@@ -385,17 +393,17 @@ public class GitRepository implements AutoCloseable {
 				// check if someone added commits to the release branch
 				if (remote != null && remoteMap.containsKey("refs/heads/" + version.getBranch())) {
 					// we need to check out the correct branch before we can do a pull, otherwise it might get merged into the wrong branch
-					git.checkout().setName(version.getBranch()).call();
+					mutate(git.checkout().setName(version.getBranch()));
 					try {
 						// pull the latest data
 						logger.info("Pulling last data for branch '" + version.getBranch() + "' from '" + remote + "'");
-						PullResult call = authenticate(git.pull()).setFastForward(FastForwardMode.FF_ONLY).setRemoteBranchName(version.getBranch()).setRemote(remote).call();
+						PullResult call = mutate(authenticate(git.pull()).setFastForward(FastForwardMode.FF_ONLY).setRemoteBranchName(version.getBranch()).setRemote(remote));
 						if (call.getMergeResult().getConflicts() != null && !call.getMergeResult().getConflicts().isEmpty()) {
 							throw new RuntimeException("Merge conflicts detected: " + call);
 						}
 					}
 					finally {
-						git.checkout().setName(branch).call();
+						mutate(git.checkout().setName(branch));
 					}
 				}
 				else if (remote != null) {
@@ -477,7 +485,7 @@ public class GitRepository implements AutoCloseable {
 		logger.info("Checking for new versions for project: " + projectName);
 		try {
 			// switch to the correct branch
-			git.checkout().setName(branch).call();
+			mutate(git.checkout().setName(branch));
 			// if you have not configured a remote, we can't pull
 			// you might be committing straight to the branch
 			if (remote != null) {
@@ -486,7 +494,7 @@ public class GitRepository implements AutoCloseable {
 				// unless we specify fast forward mode, a merge commit will always be generated, even if empty
 				// FF tries to do a fast forward if possible, other options are FF_ONLY (don't merge if it can't be forwarded) and NO_FF (always generate commit)
 				// we use FF_ONLY, there should _not_ be local commits on this branch that are not pushed to the core (?)
-				PullResult call = authenticate(git.pull()).setRemoteBranchName(branch).setTagOpt(TagOpt.FETCH_TAGS).setFastForward(FastForwardMode.FF_ONLY).setRemote(remote).call();
+				PullResult call = mutate(authenticate(git.pull()).setRemoteBranchName(branch).setTagOpt(TagOpt.FETCH_TAGS).setFastForward(FastForwardMode.FF_ONLY).setRemote(remote));
 				if (call.getMergeResult().getConflicts() != null && !call.getMergeResult().getConflicts().isEmpty()) {
 					throw new RuntimeException("Merge conflicts detected: " + call);
 				}
@@ -518,7 +526,7 @@ public class GitRepository implements AutoCloseable {
 							
 							try {
 								logger.info("Attempting checkout of already existing branch: " + newBranchName);
-								git.checkout().setName(newBranchName).call();
+								mutate(git.checkout().setName(newBranchName));
 								newVersion.setRevCommit(getLastCommitOn(newBranchName));
 							}
 							catch (Exception e) {
@@ -566,14 +574,14 @@ public class GitRepository implements AutoCloseable {
 		logger.info("Checking for main updates for project: " + projectName);
 		try {
 			// switch to the correct branch
-			git.checkout().setName(branch).call();
+			mutate(git.checkout().setName(branch));
 			
 			// if you have not configured a remote, we can't pull
 			// you might be committing straight to the branch
 			if (remote != null) {
 				// pull the latest data
 				logger.info("Pulling last data for branch '" + branch + "' from '" + remote + "'");
-				PullResult call = authenticate(git.pull()).setFastForward(FastForwardMode.FF_ONLY).setRemoteBranchName(branch).setRemote(remote).call();
+				PullResult call = mutate(authenticate(git.pull()).setFastForward(FastForwardMode.FF_ONLY).setRemoteBranchName(branch).setRemote(remote));
 				if (call.getMergeResult().getConflicts() != null && !call.getMergeResult().getConflicts().isEmpty()) {
 					throw new RuntimeException("Merge conflicts detected: " + call);
 				}
@@ -596,7 +604,7 @@ public class GitRepository implements AutoCloseable {
 					// for shared repos, someone else may have already created the release branch
 					try {
 						logger.info("Attempting checkout of already existing branch: " + newBranchName);
-						git.checkout().setName(newBranchName).call();
+						mutate(git.checkout().setName(newBranchName));
 						newVersion.setRevCommit(getLastCommitOn(newBranchName));
 					}
 					catch (Exception e) {
@@ -628,7 +636,7 @@ public class GitRepository implements AutoCloseable {
 	}
 
 	synchronized private GitPatch createPatch(GitRelease newVersion, int patchVersion) throws GitAPIException, RefAlreadyExistsException, RefNotFoundException, InvalidRefNameException {
-		git.checkout().setName(newVersion.getBranch()).call();
+		mutate(git.checkout().setName(newVersion.getBranch()));
 		GitPatch patch = new GitPatch(newVersion, patchVersion);
 		// immediately create a fix version 0 branch
 		Ref call = git.branchCreate().setName(patch.getBranch()).call();
@@ -660,7 +668,7 @@ public class GitRepository implements AutoCloseable {
 		}
 		newVersion.getPatchVersions().add(patch);
 		// back to the original one
-		git.checkout().setName(branch).call();
+		mutate(git.checkout().setName(branch));
 		return patch;
 	}
 	
@@ -670,7 +678,7 @@ public class GitRepository implements AutoCloseable {
 		String branchName = "r" + release.getVersion() + "." + patch.getPatch();
 		try {
 			// go to the correct branch
-			git.checkout().setName(branchName).call();
+			mutate(git.checkout().setName(branchName));
 			// create the branch for the environment
 			String environmentBranch = branchName + "-" + name;
 			// create a new branch for the environment
@@ -763,7 +771,7 @@ public class GitRepository implements AutoCloseable {
 	synchronized public void setMergeResult(String branch, MergeResult result) {
 		try {
 			try {
-				git.checkout().setName(branch).call();
+				mutate(git.checkout().setName(branch));
 				File file = new File(folder, "merge-result.xml");
 				if (result == null) {
 					if (file.exists()) {
@@ -784,11 +792,11 @@ public class GitRepository implements AutoCloseable {
 			// if we have an exception, reset the changes, otherwise we can't switch branches!
 			catch (Exception e) {
 				logger.error("Could not merge result", e);
-				git.reset().call();
+				mutate(git.reset());
 				throw e;
 			}
 			finally {
-				git.checkout().setName(this.branch).call();
+				mutate(git.checkout().setName(this.branch));
 			}
 		}
 		catch (Exception e) {
@@ -853,7 +861,7 @@ public class GitRepository implements AutoCloseable {
 				}
 				
 				// we can checkout the tag rather than the branch?
-				git.checkout().setName(rc == null ? branch : branch + "-RC" + rc).call();
+				mutate(git.checkout().setName(rc == null ? branch : branch + "-RC" + rc));
 				ByteBuffer newByteBuffer = IOUtils.newByteBuffer();
 				try (ZipOutputStream zipOutputStream = new ZipOutputStream(new BufferedOutputStream(IOUtils.toOutputStream(newByteBuffer)))) {
 					ResourceUtils.zip(new FileDirectory(null, folder, false), zipOutputStream, includeRoot, new Predicate<Resource>() {
@@ -876,7 +884,7 @@ public class GitRepository implements AutoCloseable {
 				return bytes;
 			}
 			finally {
-				git.checkout().setName(this.branch).call();
+				mutate(git.checkout().setName(this.branch));
 			}
 		}
 		catch (Exception e) {
@@ -895,7 +903,7 @@ public class GitRepository implements AutoCloseable {
 			}
 			
 			// switch to that branch
-			git.checkout().setName(current.getBranch()).call();
+			mutate(git.checkout().setName(current.getBranch()));
 			
 			MergeResult result = null;
 			// we check if there is a parameter file
@@ -1004,7 +1012,7 @@ public class GitRepository implements AutoCloseable {
 			}
 			
 			// switch back to the main branch
-			git.checkout().setName(branch).call();
+			mutate(git.checkout().setName(branch));
 			
 			// push it remotely if possible
 			List<RemoteConfig> remoteCall = git.remoteList().call();
@@ -1018,11 +1026,11 @@ public class GitRepository implements AutoCloseable {
 		catch (Exception e) {
 			logger.error("Merging failed", e);
 			try {
-				git.reset().call();
+				mutate(git.reset());
 				// checkout the local version
-				git.checkout().setAllPaths(true).call();
+				mutate(git.checkout().setAllPaths(true));
 				// switch back to the main branch
-				git.checkout().setName(branch).call();
+				mutate(git.checkout().setName(branch));
 			}
 			catch (Exception f) {
 				logger.error("Could not reset the current changes", f);
